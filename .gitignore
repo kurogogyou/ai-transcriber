@@ -1,0 +1,17 @@
+# Virtual environment
+venv/
+
+# Output and source folders (large media files)
+output/
+temp_sources/
+
+# Whisper model cache
+*.pt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Logs
+*.log

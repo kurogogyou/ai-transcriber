@@ -1,0 +1,14 @@
+# AI Transcriber - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# OpenAI Whisper
+openai-whisper
+
+# PyTorch with CUDA support (for GPU acceleration)
+# Note: Install separately with the appropriate CUDA version:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Or for CPU-only:
+#   pip install torch torchvision torchaudio
+
+# FFmpeg is also required (system package):
+#   sudo apt install ffmpeg
