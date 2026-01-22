@@ -1,0 +1,50 @@
+Performance Summary
+====================
+
+Hardware
+--------
+Device: NVIDIA GeForce GTX 1070 (8GB VRAM)
+Compute: CUDA
+OS: Linux 6.8.0-90-generic
+
+Whisper Configuration
+---------------------
+Model: medium.en (English-optimized, ~5GB VRAM)
+Language mode: English-only
+
+Batch Statistics
+----------------
+Total files processed: 14
+Source formats: 13x MKV, 1x MP4
+Output formats per file: 5 (txt, vtt, srt, json, tsv)
+
+Timing
+------
+Started: Thu Jan 22 01:05:27 PM AST 2026
+Completed: Thu Jan 22 03:02:18 PM AST 2026
+Total elapsed time: 116m 51s
+
+Per-file processing times (seconds):
+  File  1:   735s  (12m 15s)
+  File  2:   153s  ( 2m 33s)
+  File  3:   766s  (12m 46s)
+  File  4:   532s  ( 8m 52s)
+  File  5:   897s  (14m 57s)
+  File  6:   656s  (10m 56s)
+  File  7:   333s  ( 5m 33s)
+  File  8:   140s  ( 2m 20s)
+  File  9:   262s  ( 4m 22s)
+  File 10:   180s  ( 3m 00s)
+  File 11:   286s  ( 4m 46s)
+  File 12:  1169s  (19m 29s)
+  File 13:   572s  ( 9m 32s)
+  File 14:   330s  ( 5m 30s)
+
+Aggregate Metrics
+-----------------
+Sum of processing times: 7011s
+Minimum: 140s (2m 20s)
+Maximum: 1169s (19m 29s)
+Mean: 500.8s (8m 21s)
+Median: 432.5s (7m 13s)
+Overhead (scheduling/IO): ~20s
