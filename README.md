@@ -40,7 +40,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 ## Usage
 
 ```bash
-./whisper-batch-transcribe.sh <input_folder> [model_size] [language]
+./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter]
 ```
 
 ### Parameters
@@ -50,6 +50,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 | input_folder | path | required | Folder containing media files |
 | model_size | tiny, base, small, medium, large-v3 | small | Whisper model size |
 | language | en, es, multi | multi | Language mode |
+| extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension |
 
 ### Examples
 
@@ -62,23 +63,28 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 
 # Mixed/unknown languages (auto-detect)
 ./whisper-batch-transcribe.sh ~/Videos/mixed large-v3 multi
+
+# Process only .m4v files
+./whisper-batch-transcribe.sh ~/Videos/meetings medium multi m4v
 ```
 
 ### Supported Formats
 
-- Video: `.mkv`, `.mp4`, `.webm`
+- Video: `.mkv`, `.mp4`, `.m4v`, `.webm`
 - Audio: `.mp3`, `.wav`, `.m4a`, `.ogg`
 
 ## Output
 
-Transcripts are saved to `<input_folder>/transcripts_<model>_<language>/` with:
+Transcripts are saved to `output/transcripts_<model>_<language>/` in the script directory:
 
 - `.txt` - Plain text
 - `.vtt` - WebVTT subtitles
 - `.srt` - SRT subtitles
 - `.json` - Detailed JSON with timestamps
 - `.tsv` - Tab-separated values
-- `transcription.log` - Processing log
+- `transcription_<timestamp>.log` - Processing log (one per session)
+
+Files that already have transcripts in the output folder are automatically skipped, allowing you to resume interrupted batches or add new files without re-processing.
 
 ## Model Selection Guide
 
