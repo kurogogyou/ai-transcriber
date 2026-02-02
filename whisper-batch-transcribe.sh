@@ -1,27 +1,36 @@
 #!/bin/bash
 # Whisper Batch Transcription Script
-# Handles English, Spanish, and multilingual audio
+# Handles English, Spanish, and multilingual audio with optional speaker diarization
 #
-# Usage: ./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter]
+# Usage: ./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter] [diarize]
 #
 # Examples:
 #   ./whisper-batch-transcribe.sh "folder" small en       # English-only (uses small.en)
 #   ./whisper-batch-transcribe.sh "folder" medium es      # Spanish-only
 #   ./whisper-batch-transcribe.sh "folder" large-v3 multi # Mixed English/Spanish
-#   ./whisper-batch-transcribe.sh "folder" medium multi m4v  # Only .m4v files
+#   ./whisper-batch-transcribe.sh "folder" medium multi m4v       # Only .m4v files
+#   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
 #
 # Model sizes: tiny, base, small, medium, large-v3
 # Languages: en (English), es (Spanish), multi (auto-detect, for mixed)
-# Extension filter: optionally process only files with a specific extension (e.g., m4v)
+# Extension filter: optionally process only files with a specific extension (e.g., m4v), use "" to skip
+# Diarize: set to "true" to enable speaker diarization (requires whisperx and HF_TOKEN)
 #
-# Defaults: small model, multilingual (safest for unknown content)
+# Speaker Diarization Setup:
+#   1. pip install whisperx
+#   2. Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
+#   3. Set HF_TOKEN environment variable with your HuggingFace token
+#   4. Note: Diarization uses more VRAM (~7-8GB) and is ~1.5-2x slower
+#
+# Defaults: small model, multilingual, no diarization
 
 set -e
 
-INPUT_FOLDER="${1:?Usage: $0 <input_folder> [model_size] [language] [extension_filter]}"
+INPUT_FOLDER="${1:?Usage: $0 <input_folder> [model_size] [language] [extension_filter] [diarize]}"
 MODEL_SIZE="${2:-small}"
 LANGUAGE="${3:-multi}"
 EXT_FILTER="${4:-}"
+DIARIZE="${5:-false}"
 
 # Determine model name and language flag based on language setting
 case "$LANGUAGE" in
@@ -51,9 +60,30 @@ esac
 
 # Output to 'output/' folder in the script's directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}"
+if [[ "$DIARIZE" == "true" ]]; then
+    OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}_diarized"
+    DIARIZE_DESC="enabled"
+else
+    OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}"
+    DIARIZE_DESC="disabled"
+fi
 LOG_TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
 LOG_FILE="${OUTPUT_FOLDER}/transcription_${LOG_TIMESTAMP}.log"
+
+# Check diarization requirements
+if [[ "$DIARIZE" == "true" ]]; then
+    if ! command -v whisperx &> /dev/null; then
+        echo "ERROR: whisperx not found. Install with: pip install whisperx"
+        exit 1
+    fi
+    if [[ -z "$HF_TOKEN" ]]; then
+        echo "ERROR: HF_TOKEN environment variable required for diarization."
+        echo "  1. Get token from https://huggingface.co/settings/tokens"
+        echo "  2. Accept license at https://huggingface.co/pyannote/speaker-diarization-3.1"
+        echo "  3. Export HF_TOKEN=your_token_here"
+        exit 1
+    fi
+fi
 
 # Detect device
 if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
@@ -71,6 +101,7 @@ echo "Input folder: $INPUT_FOLDER"
 echo "Model: $MODEL"
 echo "Language: $LANG_DESC"
 echo "Device: $DEVICE ($DEVICE_NAME)"
+echo "Diarization: $DIARIZE_DESC"
 echo "Output: $OUTPUT_FOLDER"
 echo "Log: $LOG_FILE"
 echo "========================================"
@@ -83,6 +114,7 @@ mkdir -p "$OUTPUT_FOLDER"
     echo "Model: $MODEL"
     echo "Language: $LANG_DESC"
     echo "Device: $DEVICE ($DEVICE_NAME)"
+    echo "Diarization: $DIARIZE_DESC"
     echo "----------------------------------------"
 } > "$LOG_FILE"
 
@@ -130,15 +162,29 @@ for file in "${FILE_GLOBS[@]}"; do
     echo "[$CURRENT/$FILE_COUNT] Processing: $BASENAME"
     FILE_START=$(date +%s)
 
-    # Run whisper (note: $LANG_FLAG is intentionally unquoted to allow empty value)
-    whisper "$file" \
-        --model "$MODEL" \
-        --device "$DEVICE" \
-        --output_dir "$OUTPUT_FOLDER" \
-        --output_format all \
-        $LANG_FLAG \
-        --verbose False \
-        2>&1 | tee -a "$LOG_FILE"
+    if [[ "$DIARIZE" == "true" ]]; then
+        # Run whisperx with diarization
+        # Note: whisperx uses different argument format
+        whisperx "$file" \
+            --model "$MODEL_SIZE" \
+            --device "$DEVICE" \
+            --output_dir "$OUTPUT_FOLDER" \
+            --output_format all \
+            --diarize \
+            --hf_token "$HF_TOKEN" \
+            $LANG_FLAG \
+            2>&1 | tee -a "$LOG_FILE"
+    else
+        # Run standard whisper (note: $LANG_FLAG is intentionally unquoted to allow empty value)
+        whisper "$file" \
+            --model "$MODEL" \
+            --device "$DEVICE" \
+            --output_dir "$OUTPUT_FOLDER" \
+            --output_format all \
+            $LANG_FLAG \
+            --verbose False \
+            2>&1 | tee -a "$LOG_FILE"
+    fi
 
     FILE_END=$(date +%s)
     FILE_DURATION=$((FILE_END - FILE_START))

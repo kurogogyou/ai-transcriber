@@ -40,7 +40,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 ## Usage
 
 ```bash
-./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter]
+./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter] [diarize]
 ```
 
 ### Parameters
@@ -50,7 +50,8 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 | input_folder | path | required | Folder containing media files |
 | model_size | tiny, base, small, medium, large-v3 | small | Whisper model size |
 | language | en, es, multi | multi | Language mode |
-| extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension |
+| extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension (use "" to skip) |
+| diarize | true, false | false | Enable speaker diarization (who said what) |
 
 ### Examples
 
@@ -66,6 +67,9 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 
 # Process only .m4v files
 ./whisper-batch-transcribe.sh ~/Videos/meetings medium multi m4v
+
+# English with speaker diarization (identifies who said what)
+./whisper-batch-transcribe.sh ~/Videos/interviews medium en "" true
 ```
 
 ### Supported Formats
@@ -98,8 +102,61 @@ Files that already have transcripts in the output folder are automatically skipp
 
 For a GTX 1070 (8GB VRAM), `small` or `medium` models work well.
 
+## Speaker Diarization
+
+Speaker diarization identifies **who said what** in multi-speaker recordings. It's optional and requires additional setup.
+
+### When to Use Diarization
+
+| Use Case | Diarization Recommended |
+|----------|------------------------|
+| 2-person interviews | Yes |
+| Podcast with hosts | Yes |
+| Solo recordings | No |
+| Large group calls (5+) | Maybe (less accurate) |
+| Quick bulk transcription | No (slower) |
+
+### Setup
+
+1. **Install whisperX:**
+   ```bash
+   pip install whisperx
+   ```
+
+2. **Get HuggingFace token:**
+   - Create account at https://huggingface.co
+   - Get token from https://huggingface.co/settings/tokens
+   - Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
+
+3. **Set environment variable:**
+   ```bash
+   export HF_TOKEN=your_token_here
+   ```
+
+### Resource Usage
+
+| Mode | VRAM | Speed |
+|------|------|-------|
+| Whisper only | ~5GB (medium) | 1x |
+| Whisper + Diarization | ~7-8GB | 1.5-2x slower |
+
+For a GTX 1070 (8GB), diarization is tight but workable with the `medium` model.
+
+### Output
+
+With diarization enabled, transcripts include speaker labels:
+
+```
+[SPEAKER_00]: Hello, how are you doing today?
+[SPEAKER_01]: I'm doing great, thanks for asking.
+[SPEAKER_00]: Let's get started with the interview.
+```
+
+Output is saved to `output/transcripts_<model>_<language>_diarized/` to keep separate from non-diarized transcripts.
+
 ## Tips
 
 - Use `.en` models (via `en` language flag) for English-only content - they're faster and more accurate
 - For mixed English/Spanish, use `multi` to let Whisper auto-detect
 - The `large-v3` model requires significant VRAM but handles accents and mixed languages best
+- Use diarization selectively on important recordings where speaker ID matters
