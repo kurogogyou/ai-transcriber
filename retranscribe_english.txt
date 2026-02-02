@@ -1,0 +1,14 @@
+# Files incorrectly transcribed to Malay (actually English)
+# Re-transcribe with: ./whisper-batch-transcribe.sh <source_folder> medium en
+#
+# Whisper's multilingual model transcribed English speech into Malay text.
+# These need to be re-processed with the English-only model (medium.en).
+#
+# Note: The transcription.log shows 4 "Detected language: Malay" entries,
+# but file [86] was detected as English yet still output Malay text.
+# All 4 files below contain Malay transcriptions and need re-processing.
+
+Meet - Tim   Mario Weekly - Opera 2025-05-17 10-05-29-1.m4v
+Meet - Tim   Mario Weekly - Opera 2025-05-24 10-02-33-1.m4v
+Meet - Tim   Mario Weekly - Opera 2025-06-07 10-36-45-1.m4v
+Meet - Tim   Mario Weekly - Opera 2025-06-14 10-03-06-1.m4v
