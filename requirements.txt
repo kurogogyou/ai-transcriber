@@ -1,8 +1,12 @@
 # AI Transcriber - Python Dependencies
 # Install with: pip install -r requirements.txt
 
-# OpenAI Whisper
+# OpenAI Whisper (core transcription)
 openai-whisper
+
+# WhisperX (optional - for speaker diarization)
+# Uncomment the line below if you need speaker identification
+# whisperx
 
 # PyTorch with CUDA support (for GPU acceleration)
 # Note: Install separately with the appropriate CUDA version:
@@ -12,3 +16,10 @@ openai-whisper
 
 # FFmpeg is also required (system package):
 #   sudo apt install ffmpeg
+
+# Speaker Diarization Setup (optional):
+#   1. Uncomment whisperx above and run: pip install -r requirements.txt
+#      Or install directly: pip install whisperx
+#   2. Get HuggingFace token from https://huggingface.co/settings/tokens
+#   3. Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
+#   4. Export HF_TOKEN=your_token_here
