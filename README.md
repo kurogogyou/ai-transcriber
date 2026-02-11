@@ -40,14 +40,20 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 ## Usage
 
 ```bash
-./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter] [diarize]
+./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
 ```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `-o`, `--output-dir <path>` | Custom output directory (default: auto-generated in script dir) |
 
 ### Parameters
 
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
-| input_folder | path | required | Folder containing media files |
+| input_folder | path | required | Folder containing media files (subfolders are included) |
 | model_size | tiny, base, small, medium, large-v3 | small | Whisper model size |
 | language | en, es, multi | multi | Language mode |
 | extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension (use "" to skip) |
@@ -70,6 +76,9 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 
 # English with speaker diarization (identifies who said what)
 ./whisper-batch-transcribe.sh ~/Videos/interviews medium en "" true
+
+# Custom output directory
+./whisper-batch-transcribe.sh -o ~/my-transcripts ~/Videos/lectures medium en
 ```
 
 ### Supported Formats
@@ -79,7 +88,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 
 ## Output
 
-Transcripts are saved to `output/transcripts_<model>_<language>/` in the script directory:
+Transcripts are saved to `output/transcripts_<model>_<language>/` in the script directory (or to a custom path via `-o`):
 
 - `.txt` - Plain text
 - `.vtt` - WebVTT subtitles
@@ -87,6 +96,8 @@ Transcripts are saved to `output/transcripts_<model>_<language>/` in the script 
 - `.json` - Detailed JSON with timestamps
 - `.tsv` - Tab-separated values
 - `transcription_<timestamp>.log` - Processing log (one per session)
+
+The subfolder structure of the input directory is mirrored in the output. For example, `input/lectures/lecture1.mp4` produces `output/lectures/lecture1.txt`.
 
 Files that already have transcripts in the output folder are automatically skipped, allowing you to resume interrupted batches or add new files without re-processing.
 

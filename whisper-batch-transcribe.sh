@@ -2,7 +2,10 @@
 # Whisper Batch Transcription Script
 # Handles English, Spanish, and multilingual audio with optional speaker diarization
 #
-# Usage: ./whisper-batch-transcribe.sh <input_folder> [model_size] [language] [extension_filter] [diarize]
+# Usage: ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
+#
+# Options:
+#   -o, --output-dir <path>   Custom output directory (default: auto-generated in script dir)
 #
 # Examples:
 #   ./whisper-batch-transcribe.sh "folder" small en       # English-only (uses small.en)
@@ -10,6 +13,7 @@
 #   ./whisper-batch-transcribe.sh "folder" large-v3 multi # Mixed English/Spanish
 #   ./whisper-batch-transcribe.sh "folder" medium multi m4v       # Only .m4v files
 #   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
+#   ./whisper-batch-transcribe.sh -o ~/output "folder" medium en  # Custom output directory
 #
 # Model sizes: tiny, base, small, medium, large-v3
 # Languages: en (English), es (Spanish), multi (auto-detect, for mixed)
@@ -26,7 +30,24 @@
 
 set -e
 
-INPUT_FOLDER="${1:?Usage: $0 <input_folder> [model_size] [language] [extension_filter] [diarize]}"
+# Parse named flags
+CUSTOM_OUTPUT=""
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--output-dir)
+            CUSTOM_OUTPUT="$2"
+            shift 2
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}"
+
+INPUT_FOLDER="${1:?Usage: $0 [options] <input_folder> [model_size] [language] [extension_filter] [diarize]}"
 MODEL_SIZE="${2:-small}"
 LANGUAGE="${3:-multi}"
 EXT_FILTER="${4:-}"
@@ -58,14 +79,22 @@ case "$LANGUAGE" in
         ;;
 esac
 
-# Output to 'output/' folder in the script's directory
+# Output folder: use custom path if provided, otherwise auto-generate in script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "$DIARIZE" == "true" ]]; then
-    OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}_diarized"
     DIARIZE_DESC="enabled"
 else
-    OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}"
     DIARIZE_DESC="disabled"
+fi
+
+if [[ -n "$CUSTOM_OUTPUT" ]]; then
+    OUTPUT_FOLDER="$CUSTOM_OUTPUT"
+else
+    if [[ "$DIARIZE" == "true" ]]; then
+        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}_diarized"
+    else
+        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}"
+    fi
 fi
 LOG_TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
 LOG_FILE="${OUTPUT_FOLDER}/transcription_${LOG_TIMESTAMP}.log"
@@ -127,39 +156,51 @@ else
     EXTS=("${ALL_EXTS[@]}")
 fi
 
-# Count files
-FILE_COUNT=0
+# Collect files recursively using find
+FILES=()
 for ext in "${EXTS[@]}"; do
-    FILE_COUNT=$((FILE_COUNT + $(find "$INPUT_FOLDER" -maxdepth 1 -name "*.$ext" 2>/dev/null | wc -l)))
+    while IFS= read -r -d '' f; do
+        FILES+=("$f")
+    done < <(find "$INPUT_FOLDER" -type f -name "*.$ext" -print0 2>/dev/null)
 done
+FILE_COUNT=${#FILES[@]}
 CURRENT=0
 SKIPPED=0
 TOTAL_START=$(date +%s)
 
-echo "Found $FILE_COUNT media files to process"
+echo "Found $FILE_COUNT media files to process (including subfolders)"
 echo ""
 
-# Process each file
-shopt -s nullglob
-FILE_GLOBS=()
-for ext in "${EXTS[@]}"; do
-    FILE_GLOBS+=("$INPUT_FOLDER"/*."$ext")
-done
-for file in "${FILE_GLOBS[@]}"; do
-    [ -e "$file" ] || continue
+# Resolve input folder to absolute path for reliable relative path computation
+ABS_INPUT="$(cd "$INPUT_FOLDER" && pwd)"
 
+# Process each file, mirroring subfolder structure in output
+for file in "${FILES[@]}"; do
     CURRENT=$((CURRENT + 1))
     BASENAME=$(basename "$file")
     NAME="${BASENAME%.*}"
 
-    # Skip if already transcribed (output .txt exists)
-    if [ -f "$OUTPUT_FOLDER/$NAME.txt" ]; then
+    # Compute path relative to input folder and mirror it in output
+    ABS_FILE="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
+    REL_DIR="$(dirname "${ABS_FILE#"$ABS_INPUT"/}")"
+    if [[ "$REL_DIR" == "$ABS_FILE" || "$REL_DIR" == "." ]]; then
+        # File is directly in the input folder (no subfolder)
+        FILE_OUTPUT_DIR="$OUTPUT_FOLDER"
+        DISPLAY_NAME="$BASENAME"
+    else
+        FILE_OUTPUT_DIR="$OUTPUT_FOLDER/$REL_DIR"
+        DISPLAY_NAME="$REL_DIR/$BASENAME"
+    fi
+
+    # Skip if already transcribed (output .txt exists in mirrored path)
+    if [ -f "$FILE_OUTPUT_DIR/$NAME.txt" ]; then
         SKIPPED=$((SKIPPED + 1))
-        echo "[$CURRENT/$FILE_COUNT] Skipping (already done): $BASENAME"
+        echo "[$CURRENT/$FILE_COUNT] Skipping (already done): $DISPLAY_NAME"
         continue
     fi
 
-    echo "[$CURRENT/$FILE_COUNT] Processing: $BASENAME"
+    mkdir -p "$FILE_OUTPUT_DIR"
+    echo "[$CURRENT/$FILE_COUNT] Processing: $DISPLAY_NAME"
     FILE_START=$(date +%s)
 
     if [[ "$DIARIZE" == "true" ]]; then
@@ -168,7 +209,7 @@ for file in "${FILE_GLOBS[@]}"; do
         whisperx "$file" \
             --model "$MODEL_SIZE" \
             --device "$DEVICE" \
-            --output_dir "$OUTPUT_FOLDER" \
+            --output_dir "$FILE_OUTPUT_DIR" \
             --output_format all \
             --diarize \
             --hf_token "$HF_TOKEN" \
@@ -179,7 +220,7 @@ for file in "${FILE_GLOBS[@]}"; do
         whisper "$file" \
             --model "$MODEL" \
             --device "$DEVICE" \
-            --output_dir "$OUTPUT_FOLDER" \
+            --output_dir "$FILE_OUTPUT_DIR" \
             --output_format all \
             $LANG_FLAG \
             --verbose False \
@@ -190,7 +231,7 @@ for file in "${FILE_GLOBS[@]}"; do
     FILE_DURATION=$((FILE_END - FILE_START))
 
     echo "  Completed in ${FILE_DURATION}s"
-    echo "[$CURRENT/$FILE_COUNT] $BASENAME: ${FILE_DURATION}s" >> "$LOG_FILE"
+    echo "[$CURRENT/$FILE_COUNT] $DISPLAY_NAME: ${FILE_DURATION}s" >> "$LOG_FILE"
 done
 
 TOTAL_END=$(date +%s)
