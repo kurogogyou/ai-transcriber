@@ -1,25 +1,29 @@
 # AI Transcriber - Python Dependencies
-# Install with: pip install -r requirements.txt
+#
+# Install with:
+#   pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
+#   pip install -r requirements.txt
+#
+# PyTorch must be installed first from the cu118 index to ensure matching versions.
+# CUDA 11.8 is required for GTX 1070 (compute capability 6.1) support.
+# For CPU-only, skip the first command and just run: pip install -r requirements.txt
 
 # OpenAI Whisper (core transcription)
 openai-whisper
 
-# WhisperX (optional - for speaker diarization)
-# Uncomment the line below if you need speaker identification
-# whisperx
+# WhisperX (for speaker diarization)
+whisperx
 
-# PyTorch with CUDA support (for GPU acceleration)
-# Note: Install separately with the appropriate CUDA version:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# Or for CPU-only:
-#   pip install torch torchvision torchaudio
+# Pin PyTorch versions to prevent whisperx from upgrading them
+torch==2.4.0+cu118
+torchvision==0.19.0+cu118
+torchaudio==2.4.0+cu118
 
 # FFmpeg is also required (system package):
 #   sudo apt install ffmpeg
 
-# Speaker Diarization Setup (optional):
-#   1. Uncomment whisperx above and run: pip install -r requirements.txt
-#      Or install directly: pip install whisperx
+# Speaker Diarization Setup:
+#   1. Follow install instructions above
 #   2. Get HuggingFace token from https://huggingface.co/settings/tokens
 #   3. Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
 #   4. Export HF_TOKEN=your_token_here
