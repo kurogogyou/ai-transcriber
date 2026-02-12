@@ -21,8 +21,10 @@
 # Diarize: set to "true" to enable speaker diarization (requires whisperx and HF_TOKEN)
 #
 # Speaker Diarization Setup:
-#   1. pip install whisperx
-#   2. Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
+#   1. pip install whisperx (included in requirements.txt)
+#   2. Accept pyannote licenses:
+#      - https://huggingface.co/pyannote/speaker-diarization-3.1
+#      - https://huggingface.co/pyannote/segmentation-3.0
 #   3. Set HF_TOKEN environment variable with your HuggingFace token
 #   4. Note: Diarization uses more VRAM (~7-8GB) and is ~1.5-2x slower
 #
@@ -79,8 +81,16 @@ case "$LANGUAGE" in
         ;;
 esac
 
-# Output folder: use custom path if provided, otherwise auto-generate in script directory
+# Add venv nvidia library paths to LD_LIBRARY_PATH (needed for CUDA 12 libs like libcublas.so.12)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NVIDIA_LIBS="$SCRIPT_DIR/venv/lib/python3.12/site-packages/nvidia"
+if [ -d "$NVIDIA_LIBS" ]; then
+    for lib_dir in "$NVIDIA_LIBS"/*/lib; do
+        [ -d "$lib_dir" ] && export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    done
+fi
+
+# Output folder: use custom path if provided, otherwise auto-generate in script directory
 if [[ "$DIARIZE" == "true" ]]; then
     DIARIZE_DESC="enabled"
 else
@@ -209,6 +219,7 @@ for file in "${FILES[@]}"; do
         whisperx "$file" \
             --model "$MODEL_SIZE" \
             --device "$DEVICE" \
+            --compute_type int8 \
             --output_dir "$FILE_OUTPUT_DIR" \
             --output_format all \
             --diarize \

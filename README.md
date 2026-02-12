@@ -24,10 +24,10 @@ cd ai-transcriber
 # Activate the virtual environment
 source venv/bin/activate
 
-# Install PyTorch with CUDA support (for GPU)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch with CUDA 11.8 support (required for GTX 1070 / compute capability 6.1)
+pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
 
-# Install Whisper
+# Install Whisper and dependencies
 pip install -r requirements.txt
 ```
 
@@ -129,20 +129,21 @@ Speaker diarization identifies **who said what** in multi-speaker recordings. It
 
 ### Setup
 
-1. **Install whisperX:**
-   ```bash
-   pip install whisperx
-   ```
+WhisperX is included in `requirements.txt`. After installing dependencies, complete these steps:
+
+1. **Accept HuggingFace model licenses:**
+   - Create account at https://huggingface.co
+   - Accept license at https://huggingface.co/pyannote/speaker-diarization-3.1
+   - Accept license at https://huggingface.co/pyannote/segmentation-3.0
 
 2. **Get HuggingFace token:**
-   - Create account at https://huggingface.co
    - Get token from https://huggingface.co/settings/tokens
-   - Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
 
 3. **Set environment variable:**
    ```bash
    export HF_TOKEN=your_token_here
    ```
+   Add to `~/.bashrc` to persist across sessions.
 
 ### Resource Usage
 
