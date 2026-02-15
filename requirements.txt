@@ -8,8 +8,8 @@
 # CUDA 11.8 is required for GTX 1070 (compute capability 6.1) support.
 # For CPU-only, skip the first command and just run: pip install -r requirements.txt
 
-# OpenAI Whisper (core transcription)
-openai-whisper
+# whisper-ctranslate2 (fast CTranslate2-based transcription, drop-in whisper CLI replacement)
+whisper-ctranslate2
 
 # WhisperX (for speaker diarization)
 whisperx

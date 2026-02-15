@@ -1,6 +1,7 @@
 #!/bin/bash
 # Whisper Batch Transcription Script
-# Handles English, Spanish, and multilingual audio with optional speaker diarization
+# Uses whisper-ctranslate2 (CTranslate2 engine) for fast transcription, with optional
+# speaker diarization via whisperx
 #
 # Usage: ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
 #
@@ -227,14 +228,14 @@ for file in "${FILES[@]}"; do
             $LANG_FLAG \
             2>&1 | tee -a "$LOG_FILE"
     else
-        # Run standard whisper (note: $LANG_FLAG is intentionally unquoted to allow empty value)
-        whisper "$file" \
+        # Run whisper-ctranslate2 (note: $LANG_FLAG is intentionally unquoted to allow empty value)
+        whisper-ctranslate2 "$file" \
             --model "$MODEL" \
             --device "$DEVICE" \
+            --compute_type int8 \
             --output_dir "$FILE_OUTPUT_DIR" \
             --output_format all \
             $LANG_FLAG \
-            --verbose False \
             2>&1 | tee -a "$LOG_FILE"
     fi
 

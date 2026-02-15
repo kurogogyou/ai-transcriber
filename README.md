@@ -1,6 +1,6 @@
 # AI Transcriber
 
-Batch audio/video transcription using OpenAI Whisper with GPU acceleration.
+Batch audio/video transcription using [whisper-ctranslate2](https://github.com/Softcatala/whisper-ctranslate2) (CTranslate2 engine) with GPU acceleration. ~4x faster than openai-whisper with lower VRAM usage.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ source venv/bin/activate
 # Install PyTorch with CUDA 11.8 support (required for GTX 1070 / compute capability 6.1)
 pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
 
-# Install Whisper and dependencies
+# Install whisper-ctranslate2, whisperx, and dependencies
 pip install -r requirements.txt
 ```
 
@@ -149,8 +149,8 @@ WhisperX is included in `requirements.txt`. After installing dependencies, compl
 
 | Mode | VRAM | Speed |
 |------|------|-------|
-| Whisper only | ~5GB (medium) | 1x |
-| Whisper + Diarization | ~7-8GB | 1.5-2x slower |
+| whisper-ctranslate2 (int8) | ~3GB (medium) | 1x |
+| whisperx + Diarization | ~7-8GB | 1.5-2x slower |
 
 For a GTX 1070 (8GB), diarization is tight but workable with the `medium` model.
 
