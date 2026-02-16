@@ -29,6 +29,9 @@ pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118
 
 # Install whisper-ctranslate2, whisperx, and dependencies
 pip install -r requirements.txt
+
+# Install cuDNN 8 libs for CTranslate2 (coexists with cuDNN 9 needed by PyTorch)
+bash install-cudnn8.sh
 ```
 
 ### 3. Verify GPU
