@@ -57,7 +57,7 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
 | input_folder | path | required | Folder containing media files (subfolders are included) |
-| model_size | tiny, base, small, medium, large-v3 | small | Whisper model size |
+| model_size | tiny, base, small, medium, large-v3, large-v3-turbo, turbo | small | Whisper model size |
 | language | en, es, multi | multi | Language mode |
 | extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension (use "" to skip) |
 | diarize | true, false | false | Enable speaker diarization (who said what) |

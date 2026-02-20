@@ -16,7 +16,7 @@
 #   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
 #   ./whisper-batch-transcribe.sh -o ~/output "folder" medium en  # Custom output directory
 #
-# Model sizes: tiny, base, small, medium, large-v3
+# Model sizes: tiny, base, small, medium, large-v1, large-v2, large-v3, large-v3-turbo, turbo
 # Languages: en (English), es (Spanish), multi (auto-detect, for mixed)
 # Extension filter: optionally process only files with a specific extension (e.g., m4v), use "" to skip
 # Diarize: set to "true" to enable speaker diarization (requires whisperx and HF_TOKEN)
@@ -60,8 +60,9 @@ DIARIZE="${5:-false}"
 case "$LANGUAGE" in
     en)
         # English-only: use .en model variant for better accuracy
-        if [[ "$MODEL_SIZE" == "large-v3" ]]; then
-            MODEL="$MODEL_SIZE"  # large-v3 has no .en variant
+        # Only tiny/base/small/medium have .en variants; large-*, turbo, and distil-large-* do not
+        if [[ "$MODEL_SIZE" == large* || "$MODEL_SIZE" == turbo || "$MODEL_SIZE" == distil-large* ]]; then
+            MODEL="$MODEL_SIZE"
         else
             MODEL="${MODEL_SIZE}.en"
         fi
