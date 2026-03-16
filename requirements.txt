@@ -15,6 +15,10 @@ whisper-ctranslate2
 # WhisperX (for speaker diarization)
 whisperx
 
+# Runtime dependencies (not always pulled transitively)
+requests
+nvidia-cublas-cu12
+
 # Pin PyTorch versions to prevent whisperx from upgrading them
 torch==2.4.0+cu118
 torchvision==0.19.0+cu118
