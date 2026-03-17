@@ -3,32 +3,44 @@
 # Install with:
 #   pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
 #   pip install -r requirements.txt
-#   bash install-cudnn8.sh   # installs cuDNN 8 libs alongside cuDNN 9 (needed for CTranslate2)
+#   bash install-cudnn8.sh   # installs cuDNN 8 libs alongside cuDNN 9 (needed for faster-whisper/CTranslate2)
 #
 # PyTorch must be installed first from the cu118 index to ensure matching versions.
-# CUDA 11.8 is required for GTX 1070 (compute capability 6.1) support.
+# CUDA 11.8 is required for GTX 1070 / GTX 1070 Ti (compute capability 6.1) support.
 # For CPU-only, skip the first command and just run: pip install -r requirements.txt
+#
+# Version constraint rationale:
+#   - torch pinned to 2.4.0+cu118: GTX 1070 requires CUDA 11.8; torch 2.8+ ships CUDA 12.x only
+#   - whisperx pinned <3.8: versions 3.8+ require torch>=2.8, incompatible with our CUDA pin
+#   - pyannote-audio pinned <4.0: versions 4.0+ require torch>=2.8
+#   - nvidia-cudnn-cu12 pinned to 9.1.0.70: version 9.20+ causes CUDNN_STATUS_EXECUTION_FAILED on Pascal GPUs
+#   - nvidia-cu12 runtime packages: required by torch for CUDA lib loading; do NOT uninstall
+#   - Unpinning: safe once GPU is upgraded to Ampere+ (RTX 30xx/40xx) or CUDA 12 supports Pascal
 
-# whisper-ctranslate2 (fast CTranslate2-based transcription, drop-in whisper CLI replacement)
-whisper-ctranslate2
+# WhisperX (unified engine for transcription + optional diarization)
+# Replaces the previous dual-engine setup (whisper-ctranslate2 + whisperx).
+# whisperx uses faster-whisper (CTranslate2 backend) for both modes.
+whisperx<3.8
+pyannote-audio<4.0
 
-# WhisperX (for speaker diarization)
-whisperx
-
-# Runtime dependencies (not always pulled transitively)
+# Runtime dependencies
 requests
-nvidia-cublas-cu12
+matplotlib
+
+# Pin cuDNN to version compatible with CUDA 11.8 on Pascal GPUs
+nvidia-cudnn-cu12==9.1.0.70
 
 # Pin PyTorch versions to prevent whisperx from upgrading them
 torch==2.4.0+cu118
 torchvision==0.19.0+cu118
 torchaudio==2.4.0+cu118
 
-# FFmpeg is also required (system package):
-#   sudo apt install ffmpeg
+# System packages required (install via apt):
+#   sudo apt install ffmpeg libnvtoolsext1
 
 # Speaker Diarization Setup:
 #   1. Follow install instructions above
 #   2. Get HuggingFace token from https://huggingface.co/settings/tokens
 #   3. Accept pyannote license at https://huggingface.co/pyannote/speaker-diarization-3.1
-#   4. Export HF_TOKEN=your_token_here
+#   4. Accept pyannote license at https://huggingface.co/pyannote/segmentation-3.0
+#   5. Export HF_TOKEN=your_token_here (add to ~/.bashrc to persist)

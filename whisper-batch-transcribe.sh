@@ -1,7 +1,7 @@
 #!/bin/bash
 # Whisper Batch Transcription Script
-# Uses whisper-ctranslate2 (CTranslate2 engine) for fast transcription, with optional
-# speaker diarization via whisperx
+# Uses whisperx as the unified transcription engine (faster-whisper/CTranslate2 backend),
+# with optional speaker diarization via pyannote.
 #
 # Usage: ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
 #
@@ -9,24 +9,24 @@
 #   -o, --output-dir <path>   Custom output directory (default: auto-generated in script dir)
 #
 # Examples:
-#   ./whisper-batch-transcribe.sh "folder" small en       # English-only (uses small.en)
+#   ./whisper-batch-transcribe.sh "folder" small en       # English-only
 #   ./whisper-batch-transcribe.sh "folder" medium es      # Spanish-only
 #   ./whisper-batch-transcribe.sh "folder" large-v3 multi # Mixed English/Spanish
 #   ./whisper-batch-transcribe.sh "folder" medium multi m4v       # Only .m4v files
 #   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
 #   ./whisper-batch-transcribe.sh -o ~/output "folder" medium en  # Custom output directory
 #
-# Model sizes: tiny, base, small, medium, large-v1, large-v2, large-v3, large-v3-turbo, turbo
+# Model sizes: tiny, base, small, medium, large-v3, large-v3-turbo, turbo
 # Languages: en (English), es (Spanish), multi (auto-detect, for mixed)
 # Extension filter: optionally process only files with a specific extension (e.g., m4v), use "" to skip
-# Diarize: set to "true" to enable speaker diarization (requires whisperx and HF_TOKEN)
+# Diarize: set to "true" to enable speaker diarization (requires HF_TOKEN)
 #
 # Speaker Diarization Setup:
-#   1. pip install whisperx (included in requirements.txt)
-#   2. Accept pyannote licenses:
+#   1. Accept pyannote licenses:
 #      - https://huggingface.co/pyannote/speaker-diarization-3.1
 #      - https://huggingface.co/pyannote/segmentation-3.0
-#   3. Set HF_TOKEN environment variable with your HuggingFace token
+#   2. Get HuggingFace token from https://huggingface.co/settings/tokens
+#   3. Set HF_TOKEN environment variable (add to ~/.bashrc to persist)
 #   4. Note: Diarization uses more VRAM (~7-8GB) and is ~1.5-2x slower
 #
 # Defaults: small model, multilingual, no diarization
@@ -56,34 +56,23 @@ LANGUAGE="${3:-multi}"
 EXT_FILTER="${4:-}"
 DIARIZE="${5:-false}"
 
-# Determine model name and language flag based on language setting
+# Determine language flag (whisperx uses --language flag, not .en model variants)
 case "$LANGUAGE" in
     en)
-        # English-only: use .en model variant for better accuracy
-        # Only tiny/base/small/medium have .en variants; large-*, turbo, and distil-large-* do not
-        if [[ "$MODEL_SIZE" == large* || "$MODEL_SIZE" == turbo || "$MODEL_SIZE" == distil-large* ]]; then
-            MODEL="$MODEL_SIZE"
-        else
-            MODEL="${MODEL_SIZE}.en"
-        fi
         LANG_FLAG="--language en"
         LANG_DESC="English-only"
         ;;
     es)
-        # Spanish-only: use multilingual model with Spanish flag
-        MODEL="$MODEL_SIZE"
         LANG_FLAG="--language es"
         LANG_DESC="Spanish-only"
         ;;
     multi|*)
-        # Multilingual: use multilingual model, let Whisper auto-detect
-        MODEL="$MODEL_SIZE"
         LANG_FLAG=""
         LANG_DESC="Multilingual (auto-detect)"
         ;;
 esac
 
-# Add venv nvidia library paths to LD_LIBRARY_PATH (needed for CUDA 12 libs like libcublas.so.12)
+# Add venv nvidia library paths to LD_LIBRARY_PATH (needed for CUDA libs)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NVIDIA_LIBS="$SCRIPT_DIR/venv/lib/python3.12/site-packages/nvidia"
 if [ -d "$NVIDIA_LIBS" ]; then
@@ -92,7 +81,7 @@ if [ -d "$NVIDIA_LIBS" ]; then
     done
 fi
 
-# Output folder: use custom path if provided, otherwise auto-generate in script directory
+# Output folder
 if [[ "$DIARIZE" == "true" ]]; then
     DIARIZE_DESC="enabled"
 else
@@ -103,27 +92,33 @@ if [[ -n "$CUSTOM_OUTPUT" ]]; then
     OUTPUT_FOLDER="$CUSTOM_OUTPUT"
 else
     if [[ "$DIARIZE" == "true" ]]; then
-        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}_diarized"
+        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL_SIZE}_${LANGUAGE}_diarized"
     else
-        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL}_${LANGUAGE}"
+        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL_SIZE}_${LANGUAGE}"
     fi
 fi
 LOG_TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
 LOG_FILE="${OUTPUT_FOLDER}/transcription_${LOG_TIMESTAMP}.log"
 
+# Verify whisperx is available
+if ! command -v whisperx &> /dev/null; then
+    echo "ERROR: whisperx not found. Install with: pip install whisperx"
+    exit 1
+fi
+
 # Check diarization requirements
-if [[ "$DIARIZE" == "true" ]]; then
-    if ! command -v whisperx &> /dev/null; then
-        echo "ERROR: whisperx not found. Install with: pip install whisperx"
-        exit 1
-    fi
-    if [[ -z "$HF_TOKEN" ]]; then
-        echo "ERROR: HF_TOKEN environment variable required for diarization."
-        echo "  1. Get token from https://huggingface.co/settings/tokens"
-        echo "  2. Accept license at https://huggingface.co/pyannote/speaker-diarization-3.1"
-        echo "  3. Export HF_TOKEN=your_token_here"
-        exit 1
-    fi
+if [[ "$DIARIZE" == "true" && -z "$HF_TOKEN" ]]; then
+    echo "ERROR: HF_TOKEN environment variable required for diarization."
+    echo "  1. Get token from https://huggingface.co/settings/tokens"
+    echo "  2. Accept license at https://huggingface.co/pyannote/speaker-diarization-3.1"
+    echo "  3. Export HF_TOKEN=your_token_here"
+    exit 1
+fi
+
+# Check ffmpeg
+if ! command -v ffmpeg &> /dev/null; then
+    echo "ERROR: ffmpeg not found. Install with: sudo apt install ffmpeg"
+    exit 1
 fi
 
 # Detect device
@@ -139,7 +134,7 @@ echo "========================================"
 echo "Whisper Batch Transcription"
 echo "========================================"
 echo "Input folder: $INPUT_FOLDER"
-echo "Model: $MODEL"
+echo "Model: $MODEL_SIZE"
 echo "Language: $LANG_DESC"
 echo "Device: $DEVICE ($DEVICE_NAME)"
 echo "Diarization: $DIARIZE_DESC"
@@ -152,7 +147,7 @@ mkdir -p "$OUTPUT_FOLDER"
 # Start logging
 {
     echo "Transcription started: $(date)"
-    echo "Model: $MODEL"
+    echo "Model: $MODEL_SIZE"
     echo "Language: $LANG_DESC"
     echo "Device: $DEVICE ($DEVICE_NAME)"
     echo "Diarization: $DIARIZE_DESC"
@@ -196,7 +191,6 @@ for file in "${FILES[@]}"; do
     ABS_FILE="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
     REL_DIR="$(dirname "${ABS_FILE#"$ABS_INPUT"/}")"
     if [[ "$REL_DIR" == "$ABS_FILE" || "$REL_DIR" == "." ]]; then
-        # File is directly in the input folder (no subfolder)
         FILE_OUTPUT_DIR="$OUTPUT_FOLDER"
         DISPLAY_NAME="$BASENAME"
     else
@@ -215,30 +209,27 @@ for file in "${FILES[@]}"; do
     echo "[$CURRENT/$FILE_COUNT] Processing: $DISPLAY_NAME"
     FILE_START=$(date +%s)
 
-    if [[ "$DIARIZE" == "true" ]]; then
-        # Run whisperx with diarization
-        # Note: whisperx uses different argument format
-        whisperx "$file" \
-            --model "$MODEL_SIZE" \
-            --device "$DEVICE" \
-            --compute_type int8 \
-            --output_dir "$FILE_OUTPUT_DIR" \
-            --output_format all \
-            --diarize \
-            --hf_token "$HF_TOKEN" \
-            $LANG_FLAG \
-            2>&1 | tee -a "$LOG_FILE"
-    else
-        # Run whisper-ctranslate2 (note: $LANG_FLAG is intentionally unquoted to allow empty value)
-        whisper-ctranslate2 "$file" \
-            --model "$MODEL" \
-            --device "$DEVICE" \
-            --compute_type int8 \
-            --output_dir "$FILE_OUTPUT_DIR" \
-            --output_format all \
-            $LANG_FLAG \
-            2>&1 | tee -a "$LOG_FILE"
+    # Build whisperx command
+    WHISPERX_CMD=(whisperx "$file"
+        --model "$MODEL_SIZE"
+        --device "$DEVICE"
+        --compute_type int8
+        --output_dir "$FILE_OUTPUT_DIR"
+        --output_format all
+    )
+
+    # Add language flag if specified
+    if [[ -n "$LANG_FLAG" ]]; then
+        WHISPERX_CMD+=($LANG_FLAG)
     fi
+
+    # Add diarization flags if requested
+    if [[ "$DIARIZE" == "true" ]]; then
+        WHISPERX_CMD+=(--diarize --hf_token "$HF_TOKEN")
+    fi
+
+    # Run whisperx
+    "${WHISPERX_CMD[@]}" 2>&1 | tee -a "$LOG_FILE"
 
     FILE_END=$(date +%s)
     FILE_DURATION=$((FILE_END - FILE_START))
