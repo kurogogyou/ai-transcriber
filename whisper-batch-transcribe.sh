@@ -218,6 +218,12 @@ for file in "${FILES[@]}"; do
         --output_format all
     )
 
+    # Optional batch_size override (whisperx default = 16; lower it to 4-8 to fit
+    # long multi-speaker recordings into 8GB VRAM with --diarize).
+    if [[ -n "$WHISPERX_BATCH_SIZE" ]]; then
+        WHISPERX_CMD+=(--batch_size "$WHISPERX_BATCH_SIZE")
+    fi
+
     # Add language flag if specified
     if [[ -n "$LANG_FLAG" ]]; then
         WHISPERX_CMD+=($LANG_FLAG)

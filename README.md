@@ -165,6 +165,8 @@ Speaker diarization identifies **who said what** in multi-speaker recordings.
 | Transcription only (int8) | ~3GB (medium) | 1x |
 | Transcription + Diarization | ~7-8GB | 1.5-2x slower |
 
+For long multi-speaker recordings on 8 GB Pascal cards, lower whisperx's batch size from the default 16 by exporting `WHISPERX_BATCH_SIZE=8` (or `4`) before running the script. Reduces peak VRAM at the cost of throughput.
+
 ### Output
 
 With diarization, transcripts include speaker labels:
