@@ -1,66 +1,53 @@
 # AI Transcriber
 
-Batch audio/video transcription using [whisperx](https://github.com/m-bain/whisperX) (faster-whisper/CTranslate2 engine) with GPU acceleration and optional speaker diarization.
+Batch audio/video transcription via the [gpu-broker](/opt/brain/src/gpu-broker/)-managed whisperx-server container. No local whisperx, torch, or CUDA install required — the script POSTs each file to the broker's `/transcribe` endpoint and writes the standard 5 output formats from the response.
+
+## Post-Phase-4 architecture (2026-06-14)
+
+Before:
+
+```
+~/bigrepo/Mario/Projects/ai-transcriber/
+├── venv/                  9.6 GB  (torch + whisperx + pyannote + cuDNN8 + weights)
+├── install-cudnn8.sh      cuDNN 8/9 coexistence workaround for CTranslate2
+├── whisper-batch-transcribe.sh   loops the local `whisperx` CLI per file
+└── requirements.txt       torch 2.4.0+cu118 + whisperx <3.8 + cudnn 9.1.0.70
+```
+
+After:
+
+```
+/opt/brain/src/ai-transcriber/        (symlinked at ~/src/ai-transcriber)
+├── transcribe_via_broker.py   POSTs to broker /transcribe, writes 5 output formats
+├── whisper-batch-transcribe.sh  thin dispatcher → transcribe_via_broker.py
+├── requirements.txt           `requests>=2.31` (one line)
+└── /opt/fast/venvs/ai-transcriber/   19 MB venv (500× smaller)
+```
+
+Everything VRAM-related — whisperx large-v3, Pascal-compat torch pin, VAD-SHA, cuDNN8, batch_size=4 — lives inside the broker-managed `gpu-broker/whisperx-server:0.1.0` container. Frozen via Docker image build; no host-side drift possible.
 
 ## Requirements
 
-- Python 3.8+
-- NVIDIA GPU with CUDA support (optional, falls back to CPU)
-- FFmpeg
-- libnvtoolsext1 (NVIDIA Tools Extension)
+- gpu-broker running on `http://127.0.0.1:8090` (`systemctl --user is-active gpu-broker.service`)
+- `/opt/fast/venvs/ai-transcriber/` with `requests` installed (see provisioning below)
+- ffmpeg for media inspection (not strictly required for the broker path, but `/transcribe` skill may call it for audio probing)
 
-## Installation
+That's it. No CUDA, no torch, no Python 3.12+, no HF_TOKEN host-side (HF_TOKEN is configured **once** at the broker container's env for diarization).
 
-### 1. System Dependencies
-
-```bash
-sudo apt install ffmpeg libnvtoolsext1
-```
-
-### 2. Python Environment
+## Provisioning the venv (one-time)
 
 ```bash
-cd ai-transcriber
-
-# Activate the virtual environment
-source venv/bin/activate
-
-# Install PyTorch with CUDA 11.8 support (required for GTX 1070 / compute capability 6.1)
-pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
-
-# Install whisperx and dependencies
-pip install -r requirements.txt
-
-# Install cuDNN 8 libs for CTranslate2 (coexists with cuDNN 9 needed by PyTorch)
-bash install-cudnn8.sh
+python3 -m venv /opt/fast/venvs/ai-transcriber
+/opt/fast/venvs/ai-transcriber/bin/pip install -r /opt/brain/src/ai-transcriber/requirements.txt
 ```
-
-### 3. Verify GPU
-
-```bash
-python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
-```
-
-### Version Constraints
-
-All version pins exist because the GTX 1070 (Pascal, compute capability 6.1) requires CUDA 11.8:
-
-| Package | Pin | Reason |
-|---------|-----|--------|
-| torch | 2.4.0+cu118 | Last version with CUDA 11.8 wheels |
-| whisperx | <3.8 | 3.8+ requires torch>=2.8 |
-| pyannote-audio | <4.0 | 4.0+ requires torch>=2.8 |
-| nvidia-cudnn-cu12 | 9.1.0.70 | 9.20+ causes CUDNN_STATUS_EXECUTION_FAILED on Pascal |
-
-**When to unpin:** After upgrading GPU to Ampere+ (RTX 30xx/40xx) where CUDA 12 is natively supported.
-
-**Do NOT uninstall nvidia-cu12 runtime packages.** torch needs them for CUDA lib loading even on CUDA 11.8.
 
 ## Usage
 
 ```bash
 ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
 ```
+
+Same CLI contract as the legacy bash script — the `/transcribe` skill keeps working without changes.
 
 ### Options
 
@@ -72,11 +59,11 @@ All version pins exist because the GTX 1070 (Pascal, compute capability 6.1) req
 
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
-| input_folder | path | required | Folder containing media files (subfolders are included) |
-| model_size | tiny, base, small, medium, large-v3, large-v3-turbo, turbo | small | Whisper model size |
-| language | en (English), es (Spanish), multi (auto-detect) | multi | Language mode |
-| extension_filter | file extension (e.g., m4v, mp4) | all | Process only files with this extension (use "" to skip) |
-| diarize | true, false | false | Enable speaker diarization (who said what) |
+| input_folder | path | required | Folder containing media files (subfolders included) |
+| model_size | (any of the legacy names) | small | **Ignored** — broker pins large-v3 server-side via image |
+| language | en, es, multi | multi | Language mode |
+| extension_filter | file extension (e.g. m4v) | all | Process only files with this extension (use "" to skip) |
+| diarize | true, false | false | Enable speaker diarization (requires HF_TOKEN on broker container) |
 
 ### Examples
 
@@ -105,36 +92,39 @@ All version pins exist because the GTX 1070 (Pascal, compute capability 6.1) req
 - Video: `.mkv`, `.mp4`, `.m4v`, `.webm`
 - Audio: `.mp3`, `.wav`, `.m4a`, `.ogg`
 
+### Path constraints
+
+The broker's whisperx-server container bind-mounts `/home/mario` and `/opt/brain` (read-only) — audio paths under these resolve directly inside the container. Audio elsewhere (e.g. `/tmp/...` or `/mnt/...`) needs either:
+
+- a `cp` / `mv` to bring it under `/home/mario/` or `/opt/brain/`, OR
+- adding the source tree to `volumes` in `/opt/brain/src/gpu-broker/broker/docker_mgr.py` + restarting the broker.
+
+The script warns on non-resolvable paths before POSTing.
+
+### Env overrides
+
+| Var | Default | Purpose |
+|---|---|---|
+| `GPU_BROKER_URL` | `http://127.0.0.1:8090` | broker base URL (override for remote brokers) |
+| `WHISPERX_BATCH_SIZE` | broker default (4) | per-file batch_size override; rarely needed |
+| `TRANSCRIBE_TIMEOUT` | 1800 | per-file timeout seconds |
+
 ## Output
 
-Transcripts are saved to `output/transcripts_<model>_<language>/` (or custom path via `-o`):
+Same 5 formats as before, mirrored from input folder structure:
 
-- `.txt` - Plain text
-- `.vtt` - WebVTT subtitles
-- `.srt` - SRT subtitles
-- `.json` - Detailed JSON with timestamps
-- `.tsv` - Tab-separated values
-- `transcription_<timestamp>.log` - Processing log
+- `.txt` — plain text, one segment per line (with `[SPEAKER_NN]` prefix when diarized)
+- `.srt` — SubRip subtitles
+- `.vtt` — WebVTT subtitles
+- `.json` — full broker `TranscribeResponse` (segments, language, duration, transcribe_ms, align_ms, diarize_ms)
+- `.tsv` — tab-separated (start, end, [speaker], text)
+- `transcription_<timestamp>.log` — processing log
 
-Subfolder structure is mirrored from input to output. Files already transcribed are automatically skipped.
-
-## Model Selection Guide
-
-| Model | VRAM | Speed | Accuracy | Best For |
-|-------|------|-------|----------|----------|
-| tiny | ~1GB | Fastest | Basic | Quick drafts |
-| base | ~1GB | Fast | Good | Simple content |
-| small | ~2GB | Medium | Better | General use |
-| medium | ~5GB | Slow | Great | Quality transcripts |
-| large-v3 | ~10GB | Slowest | Best | Professional/multilingual |
-
-For a GTX 1070 (8GB VRAM), `small` or `medium` models work well. `large-v3` is tight but workable without diarization.
+Already-transcribed files are skipped (existence check on the `.txt`).
 
 ## Speaker Diarization
 
-Speaker diarization identifies **who said what** in multi-speaker recordings.
-
-### When to Use
+`diarize=true` enables pyannote speaker labels. Requires `HF_TOKEN` to be set in the **broker container's** environment (`/opt/brain/src/gpu-broker/.env` or per docker-compose); the host doesn't need it.
 
 | Use Case | Recommended |
 |----------|-------------|
@@ -144,71 +134,35 @@ Speaker diarization identifies **who said what** in multi-speaker recordings.
 | Large group calls (5+) | Maybe (less accurate) |
 | Quick bulk transcription | No (slower) |
 
-### Setup
+Resource usage:
 
-1. **Accept HuggingFace model licenses:**
-   - https://huggingface.co/pyannote/speaker-diarization-3.1
-   - https://huggingface.co/pyannote/segmentation-3.0
-
-2. **Get HuggingFace token:** https://huggingface.co/settings/tokens
-
-3. **Set environment variable:**
-   ```bash
-   export HF_TOKEN=your_token_here
-   ```
-   Add to `~/.bashrc` to persist across sessions.
-
-### Resource Usage
-
-| Mode | VRAM | Speed |
-|------|------|-------|
-| Transcription only (int8) | ~3GB (medium) | 1x |
-| Transcription + Diarization | ~7-8GB | 1.5-2x slower |
-
-For long multi-speaker recordings on 8 GB Pascal cards, lower whisperx's batch size from the default 16 by exporting `WHISPERX_BATCH_SIZE=8` (or `4`) before running the script. Reduces peak VRAM at the cost of throughput.
-
-### Output
-
-With diarization, transcripts include speaker labels:
-
-```
-[SPEAKER_00]: Hello, how are you doing today?
-[SPEAKER_01]: I'm doing great, thanks for asking.
-```
-
-Output folder gets a `_diarized` suffix to keep separate from plain transcripts.
-
-## Architecture
-
-This tool uses **whisperx as the unified transcription engine** for both plain and diarized modes. Previously it used a dual-engine setup (whisper-ctranslate2 for plain, whisperx for diarized), which caused persistent dependency conflicts. Unified in March 2026.
-
-whisperx uses faster-whisper (CTranslate2 backend) for transcription and pyannote-audio for diarization. Both run on GPU via the same CUDA/cuDNN stack.
+| Mode | VRAM (broker-side) | Speed |
+|------|---------------------|-------|
+| Transcription only | ~5.8 GiB (whisperx large-v3 int8) | 1x |
+| Transcription + Diarization | adds pyannote pipeline | 1.5-2x slower |
 
 ## Troubleshooting
 
-**"libnvToolsExt.so.1: cannot open shared object file"**
-Install the system package: `sudo apt install libnvtoolsext1`
+**"venv not found at /opt/fast/venvs/ai-transcriber/bin/python"**
+Provision per the section above.
 
-**"CUDNN_STATUS_EXECUTION_FAILED"**
-cuDNN version mismatch. Pin nvidia-cudnn-cu12 to 9.1.0.70:
-`pip install nvidia-cudnn-cu12==9.1.0.70`
-Then re-run `bash install-cudnn8.sh`.
+**"broker infeasible — role disabled in roles.yaml: transcribe"**
+The broker has `transcribe.enabled: false` in `config/roles.yaml` — flip to `true` and `systemctl --user restart gpu-broker.service`.
 
-**"ffmpeg: No such file or directory"**
-Install ffmpeg: `sudo apt install ffmpeg`
+**"broker — acquire transport error"**
+The broker isn't running. `systemctl --user start gpu-broker.service`, then `curl http://127.0.0.1:8090/health`.
 
-**Device shows "CPU" instead of CUDA**
-Make sure venv is activated (`source venv/bin/activate`) before running the script. The LD_LIBRARY_PATH setup in the script needs the venv nvidia packages to be findable.
+**"HTTP 400 — audio_path not found inside container"**
+Audio path is outside the broker's bind mounts. Move under `/home/mario/` or `/opt/brain/`, or extend `docker_mgr.py` to add the source tree.
 
-**pip dependency conflicts after upgrading whisperx**
-whisperx upgrades often pull newer torch versions that break CUDA 11.8 compatibility. After any pip upgrade, always reinstall the pinned torch:
-```bash
-pip install torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
-```
+**Already-transcribed files re-processed**
+Check `.txt` exists at the mirrored output path. The auto-skip is based solely on `.txt`'s existence; `.srt`/`.vtt`/`.json`/`.tsv` are regenerated if `.txt` is missing.
 
-## Tips
+## Rollback path
 
-- Use `en` language flag for English-only content (faster, more accurate)
-- `large-v3` handles accents and mixed languages best but needs significant VRAM
-- Use diarization selectively on important recordings where speaker ID matters
-- Resume interrupted batches safely (already-transcribed files are skipped)
+The original local-whisperx repo is preserved at `~/bigrepo/Mario/Projects/ai-transcriber/` (including its 9.6 GB venv). To revert: update the `/transcribe` skill to point back at `~/bigrepo/Mario/Projects/ai-transcriber/whisper-batch-transcribe.sh`. Plan to remove the old copy 1 week after Phase 4 cutover lands green.
+
+## History
+
+- **Pre-2026-06-14:** local whisperx 3.3.2 + torch 2.4.0+cu118 + pyannote 3.3.2 + cuDNN8/9 coexistence at `~/bigrepo/Mario/Projects/ai-transcriber/`.
+- **2026-06-14 (this revision):** repo moved to `/opt/brain/src/ai-transcriber/`, venv shrunk from 9.6 GB to 19 MB, script rewritten to POST to gpu-broker `/transcribe`. Phase 4 Task #4 of [gpu-model-broker](../../repo/Mind/projects/active/gpu-model-broker.md).

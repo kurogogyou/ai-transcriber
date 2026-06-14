@@ -1,264 +1,44 @@
 #!/bin/bash
-# Whisper Batch Transcription Script
-# Uses whisperx as the unified transcription engine (faster-whisper/CTranslate2 backend),
-# with optional speaker diarization via pyannote.
+# Whisper Batch Transcription — dispatches to gpu-broker /transcribe.
 #
-# Usage: ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
+# Post-Phase-4 (2026-06-14): this script no longer loads whisperx locally.
+# All transcription is dispatched to the broker-managed whisperx-server
+# container via transcribe_via_broker.py (HTTP POST per file).
+#
+# Usage (unchanged for skill compat):
+#   ./whisper-batch-transcribe.sh [options] <input_folder> [model_size] [language] [extension_filter] [diarize]
 #
 # Options:
 #   -o, --output-dir <path>   Custom output directory (default: auto-generated in script dir)
 #
 # Examples:
-#   ./whisper-batch-transcribe.sh "folder" small en       # English-only
-#   ./whisper-batch-transcribe.sh "folder" medium es      # Spanish-only
-#   ./whisper-batch-transcribe.sh "folder" large-v3 multi # Mixed English/Spanish
+#   ./whisper-batch-transcribe.sh "folder" small en               # English-only
+#   ./whisper-batch-transcribe.sh "folder" medium es              # Spanish-only
+#   ./whisper-batch-transcribe.sh "folder" large-v3 multi         # Mixed English/Spanish
 #   ./whisper-batch-transcribe.sh "folder" medium multi m4v       # Only .m4v files
 #   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
 #   ./whisper-batch-transcribe.sh -o ~/output "folder" medium en  # Custom output directory
 #
-# Model sizes: tiny, base, small, medium, large-v3, large-v3-turbo, turbo
-# Languages: en (English), es (Spanish), multi (auto-detect, for mixed)
-# Extension filter: optionally process only files with a specific extension (e.g., m4v), use "" to skip
-# Diarize: set to "true" to enable speaker diarization (requires HF_TOKEN)
+# Model sizes: legacy positional (ignored — broker pins large-v3 server-side).
+# Languages:   en | es | multi (auto-detect)
+# Diarize:     "true" to enable speaker diarization (requires HF_TOKEN
+#              configured in the broker's whisperx-server container)
 #
-# Speaker Diarization Setup:
-#   1. Accept pyannote licenses:
-#      - https://huggingface.co/pyannote/speaker-diarization-3.1
-#      - https://huggingface.co/pyannote/segmentation-3.0
-#   2. Get HuggingFace token from https://huggingface.co/settings/tokens
-#   3. Set HF_TOKEN environment variable (add to ~/.bashrc to persist)
-#   4. Note: Diarization uses more VRAM (~7-8GB) and is ~1.5-2x slower
-#
-# Defaults: small model, multilingual, no diarization
+# Env overrides:
+#   GPU_BROKER_URL       broker base URL (default http://127.0.0.1:8090)
+#   WHISPERX_BATCH_SIZE  override broker's pinned batch_size=4 (use sparingly)
+#   TRANSCRIBE_TIMEOUT   per-file timeout seconds (default 1800)
 
 set -e
 
-# Parse named flags
-CUSTOM_OUTPUT=""
-POSITIONAL_ARGS=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o|--output-dir)
-            CUSTOM_OUTPUT="$2"
-            shift 2
-            ;;
-        *)
-            POSITIONAL_ARGS+=("$1")
-            shift
-            ;;
-    esac
-done
-set -- "${POSITIONAL_ARGS[@]}"
-
-INPUT_FOLDER="${1:?Usage: $0 [options] <input_folder> [model_size] [language] [extension_filter] [diarize]}"
-MODEL_SIZE="${2:-small}"
-LANGUAGE="${3:-multi}"
-EXT_FILTER="${4:-}"
-DIARIZE="${5:-false}"
-
-# Determine language flag (whisperx uses --language flag, not .en model variants)
-case "$LANGUAGE" in
-    en)
-        LANG_FLAG="--language en"
-        LANG_DESC="English-only"
-        ;;
-    es)
-        LANG_FLAG="--language es"
-        LANG_DESC="Spanish-only"
-        ;;
-    multi|*)
-        LANG_FLAG=""
-        LANG_DESC="Multilingual (auto-detect)"
-        ;;
-esac
-
-# Add venv nvidia library paths to LD_LIBRARY_PATH (needed for CUDA libs)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NVIDIA_LIBS="$SCRIPT_DIR/venv/lib/python3.12/site-packages/nvidia"
-if [ -d "$NVIDIA_LIBS" ]; then
-    for lib_dir in "$NVIDIA_LIBS"/*/lib; do
-        [ -d "$lib_dir" ] && export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    done
-fi
+VENV_PY="/opt/fast/venvs/ai-transcriber/bin/python"
 
-# Output folder
-if [[ "$DIARIZE" == "true" ]]; then
-    DIARIZE_DESC="enabled"
-else
-    DIARIZE_DESC="disabled"
-fi
-
-if [[ -n "$CUSTOM_OUTPUT" ]]; then
-    OUTPUT_FOLDER="$CUSTOM_OUTPUT"
-else
-    if [[ "$DIARIZE" == "true" ]]; then
-        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL_SIZE}_${LANGUAGE}_diarized"
-    else
-        OUTPUT_FOLDER="${SCRIPT_DIR}/output/transcripts_${MODEL_SIZE}_${LANGUAGE}"
-    fi
-fi
-LOG_TIMESTAMP=$(date +%Y-%m-%d_%H%M%S)
-LOG_FILE="${OUTPUT_FOLDER}/transcription_${LOG_TIMESTAMP}.log"
-
-# Verify whisperx is available
-if ! command -v whisperx &> /dev/null; then
-    echo "ERROR: whisperx not found. Install with: pip install whisperx"
+if [ ! -x "$VENV_PY" ]; then
+    echo "ERROR: venv not found at $VENV_PY"
+    echo "Provision with: python3 -m venv /opt/fast/venvs/ai-transcriber && \\"
+    echo "                /opt/fast/venvs/ai-transcriber/bin/pip install -r $SCRIPT_DIR/requirements.txt"
     exit 1
 fi
 
-# Check diarization requirements
-if [[ "$DIARIZE" == "true" && -z "$HF_TOKEN" ]]; then
-    echo "ERROR: HF_TOKEN environment variable required for diarization."
-    echo "  1. Get token from https://huggingface.co/settings/tokens"
-    echo "  2. Accept license at https://huggingface.co/pyannote/speaker-diarization-3.1"
-    echo "  3. Export HF_TOKEN=your_token_here"
-    exit 1
-fi
-
-# Check ffmpeg
-if ! command -v ffmpeg &> /dev/null; then
-    echo "ERROR: ffmpeg not found. Install with: sudo apt install ffmpeg"
-    exit 1
-fi
-
-# Detect device
-if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-    DEVICE="cuda"
-    DEVICE_NAME=$(python3 -c "import torch; print(torch.cuda.get_device_name(0))")
-else
-    DEVICE="cpu"
-    DEVICE_NAME="CPU"
-fi
-
-echo "========================================"
-echo "Whisper Batch Transcription"
-echo "========================================"
-echo "Input folder: $INPUT_FOLDER"
-echo "Model: $MODEL_SIZE"
-echo "Language: $LANG_DESC"
-echo "Device: $DEVICE ($DEVICE_NAME)"
-echo "Diarization: $DIARIZE_DESC"
-echo "Output: $OUTPUT_FOLDER"
-echo "Log: $LOG_FILE"
-echo "========================================"
-
-mkdir -p "$OUTPUT_FOLDER"
-
-# Start logging
-{
-    echo "Transcription started: $(date)"
-    echo "Model: $MODEL_SIZE"
-    echo "Language: $LANG_DESC"
-    echo "Device: $DEVICE ($DEVICE_NAME)"
-    echo "Diarization: $DIARIZE_DESC"
-    echo "----------------------------------------"
-} > "$LOG_FILE"
-
-# Build extension list
-ALL_EXTS=(mkv mp4 m4v webm mp3 wav m4a ogg)
-if [[ -n "$EXT_FILTER" ]]; then
-    EXTS=("$EXT_FILTER")
-    echo "Extension filter: *.$EXT_FILTER only"
-else
-    EXTS=("${ALL_EXTS[@]}")
-fi
-
-# Collect files recursively using find
-FILES=()
-for ext in "${EXTS[@]}"; do
-    while IFS= read -r -d '' f; do
-        FILES+=("$f")
-    done < <(find "$INPUT_FOLDER" -type f -name "*.$ext" -print0 2>/dev/null)
-done
-FILE_COUNT=${#FILES[@]}
-CURRENT=0
-SKIPPED=0
-TOTAL_START=$(date +%s)
-
-echo "Found $FILE_COUNT media files to process (including subfolders)"
-echo ""
-
-# Resolve input folder to absolute path for reliable relative path computation
-ABS_INPUT="$(cd "$INPUT_FOLDER" && pwd)"
-
-# Process each file, mirroring subfolder structure in output
-for file in "${FILES[@]}"; do
-    CURRENT=$((CURRENT + 1))
-    BASENAME=$(basename "$file")
-    NAME="${BASENAME%.*}"
-
-    # Compute path relative to input folder and mirror it in output
-    ABS_FILE="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
-    REL_DIR="$(dirname "${ABS_FILE#"$ABS_INPUT"/}")"
-    if [[ "$REL_DIR" == "$ABS_FILE" || "$REL_DIR" == "." ]]; then
-        FILE_OUTPUT_DIR="$OUTPUT_FOLDER"
-        DISPLAY_NAME="$BASENAME"
-    else
-        FILE_OUTPUT_DIR="$OUTPUT_FOLDER/$REL_DIR"
-        DISPLAY_NAME="$REL_DIR/$BASENAME"
-    fi
-
-    # Skip if already transcribed (output .txt exists in mirrored path)
-    if [ -f "$FILE_OUTPUT_DIR/$NAME.txt" ]; then
-        SKIPPED=$((SKIPPED + 1))
-        echo "[$CURRENT/$FILE_COUNT] Skipping (already done): $DISPLAY_NAME"
-        continue
-    fi
-
-    mkdir -p "$FILE_OUTPUT_DIR"
-    echo "[$CURRENT/$FILE_COUNT] Processing: $DISPLAY_NAME"
-    FILE_START=$(date +%s)
-
-    # Build whisperx command
-    WHISPERX_CMD=(whisperx "$file"
-        --model "$MODEL_SIZE"
-        --device "$DEVICE"
-        --compute_type int8
-        --output_dir "$FILE_OUTPUT_DIR"
-        --output_format all
-    )
-
-    # Optional batch_size override (whisperx default = 16; lower it to 4-8 to fit
-    # long multi-speaker recordings into 8GB VRAM with --diarize).
-    if [[ -n "$WHISPERX_BATCH_SIZE" ]]; then
-        WHISPERX_CMD+=(--batch_size "$WHISPERX_BATCH_SIZE")
-    fi
-
-    # Add language flag if specified
-    if [[ -n "$LANG_FLAG" ]]; then
-        WHISPERX_CMD+=($LANG_FLAG)
-    fi
-
-    # Add diarization flags if requested
-    if [[ "$DIARIZE" == "true" ]]; then
-        WHISPERX_CMD+=(--diarize --hf_token "$HF_TOKEN")
-    fi
-
-    # Run whisperx
-    "${WHISPERX_CMD[@]}" 2>&1 | tee -a "$LOG_FILE"
-
-    FILE_END=$(date +%s)
-    FILE_DURATION=$((FILE_END - FILE_START))
-
-    echo "  Completed in ${FILE_DURATION}s"
-    echo "[$CURRENT/$FILE_COUNT] $DISPLAY_NAME: ${FILE_DURATION}s" >> "$LOG_FILE"
-done
-
-TOTAL_END=$(date +%s)
-TOTAL_DURATION=$((TOTAL_END - TOTAL_START))
-MINUTES=$((TOTAL_DURATION / 60))
-SECONDS=$((TOTAL_DURATION % 60))
-
-PROCESSED=$((FILE_COUNT - SKIPPED))
-echo ""
-echo "========================================"
-echo "Completed: $PROCESSED processed, $SKIPPED skipped (already done)"
-echo "Total time: ${MINUTES}m ${SECONDS}s"
-echo "Output: $OUTPUT_FOLDER"
-echo "========================================"
-
-{
-    echo "----------------------------------------"
-    echo "Transcription completed: $(date)"
-    echo "Total time: ${MINUTES}m ${SECONDS}s"
-} >> "$LOG_FILE"
+exec "$VENV_PY" "$SCRIPT_DIR/transcribe_via_broker.py" "$@"
