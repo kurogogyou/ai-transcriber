@@ -94,9 +94,9 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 
 ### Path constraints
 
-The broker's whisperx-server container bind-mounts `/home/mario` and `/opt/brain` (read-only) — audio paths under these resolve directly inside the container. Audio elsewhere (e.g. `/tmp/...` or `/mnt/...`) needs either:
+The broker's whisperx-server container bind-mounts `/home/mario`, `/opt/brain`, and `/mnt/bigrepo` (all read-only) — audio paths under any of these resolve directly inside the container. **Symlink gotcha:** the client canonicalizes via `Path.resolve()` before POSTing, so `~/bigrepo/...` (which symlinks to `/mnt/bigrepo/bigrepo/...` on FATEBURN) shows up as the canonical `/mnt/bigrepo/...` path. The `/mnt/bigrepo` mount covers this. Audio elsewhere (e.g. `/tmp/...` or other host trees) needs either:
 
-- a `cp` / `mv` to bring it under `/home/mario/` or `/opt/brain/`, OR
+- a `cp` / `mv` to bring it under one of the mounted trees, OR
 - adding the source tree to `volumes` in `/opt/brain/src/gpu-broker/broker/docker_mgr.py` + restarting the broker.
 
 The script warns on non-resolvable paths before POSTing.
