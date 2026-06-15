@@ -121,16 +121,20 @@ def write_outputs(response: dict, output_dir: Path, basename: str, diarize: bool
     (output_dir / f"{basename}.tsv").write_text("\n".join(tsv_lines) + "\n", encoding="utf-8")
 
 
+_BROKER_MOUNTS = ("/home/mario/", "/opt/brain/", "/mnt/bigrepo/")
+
+
 def _check_path_accessible_to_container(audio: Path) -> None:
-    """Whisperx-server container only sees /home/mario + /opt/brain (RO).
-    Audio paths elsewhere will fail with HTTP 400 from the worker."""
+    """Whisperx-server container only sees the host trees listed in
+    _BROKER_MOUNTS (RO). Audio paths elsewhere will fail with HTTP 400."""
     p = str(audio.resolve())
-    if not (p.startswith("/home/mario/") or p.startswith("/opt/brain/")):
+    if not any(p.startswith(m) for m in _BROKER_MOUNTS):
         sys.stderr.write(
             f"WARN: audio path {p} is outside the broker's bind mounts "
-            f"(/home/mario, /opt/brain). Worker may return HTTP 400. Either "
-            f"move the audio under one of those trees, or extend the mounts "
-            f"in gpu-broker/broker/docker_mgr.py.\n"
+            f"({', '.join(m.rstrip('/') for m in _BROKER_MOUNTS)}). "
+            f"Worker may return HTTP 400. Either move the audio under one of "
+            f"those trees, or extend the mounts in "
+            f"gpu-broker/broker/docker_mgr.py.\n"
         )
 
 
