@@ -210,6 +210,26 @@ def main() -> int:
         with broker.acquire("transcribe", hold_seconds=int(TRANSCRIBE_TIMEOUT * len(files))) as h:
             log(f"acquired transcribe endpoint={h.endpoint} cold_start_ms={h.cold_start_ms} "
                 f"evicted={h.evicted}")
+
+            # Preflight the capability before spending the batch on it. Asking
+            # the worker whether it CAN diarize costs one HTTP round trip; not
+            # asking cost a 57s cold load per file and an opaque 500 on
+            # 2026-09-08. Only gates when --diarize was actually requested.
+            if diarize:
+                try:
+                    hz = requests.get(f"{h.endpoint}/health", timeout=30).json()
+                except (requests.RequestException, ValueError) as exc:
+                    log(f"WARN: could not preflight /health ({exc}); proceeding anyway")
+                else:
+                    if hz.get("diarize_available") is False:
+                        log("\nERROR: diarization requested but the worker cannot "
+                            "diarize — aborting before processing any files.")
+                        log(f"  worker says: {hz.get('diarize_error')}")
+                        log_fh.close()
+                        return 3
+                    if "diarize_available" not in hz:
+                        log("WARN: worker predates the diarize capability probe "
+                            "(image < 0.2.1); cannot preflight. Proceeding.")
             for i, file in enumerate(files, 1):
                 file_output_dir, display = output_dir_for(file, input_root, output_root)
                 basename = file.stem
@@ -237,7 +257,19 @@ def main() -> int:
                     r.raise_for_status()
                     response = r.json()
                 except requests.RequestException as exc:
-                    log(f"  FAILED: {exc}")
+                    # Surface the server's own message, not just the status line.
+                    # A bare "500 Server Error" cost a whole debugging session on
+                    # 2026-09-08: the body carried LocalEntryNotFoundError (missing
+                    # pyannote weights) and was thrown away here.
+                    detail = ""
+                    resp = getattr(exc, "response", None)
+                    if resp is not None:
+                        try:
+                            body = resp.json()
+                            detail = body.get("detail") or json.dumps(body)[:500]
+                        except ValueError:
+                            detail = resp.text[:500]
+                    log(f"  FAILED: {exc}" + (f"\n    server said: {detail}" if detail else ""))
                     failed += 1
                     continue
 
@@ -258,7 +290,17 @@ def main() -> int:
 
     dt_total = time.time() - t_total
     log("=" * 40)
-    log(f"Done: {processed} processed, {skipped} skipped, {failed} failed")
+    # The summary must not read the same on a failed run as on a good one. On
+    # 2026-09-08 a run that transcribed nothing printed a bare "Done:" line and
+    # was taken for success by two consecutive readers.
+    if failed:
+        log(f"FAILED: {failed} of {len(files)} file(s) did NOT transcribe "
+            f"({processed} processed, {skipped} skipped) — exit code 1")
+    elif processed == 0:
+        log(f"NOTHING DONE: 0 processed, {skipped} skipped "
+            f"(all inputs already had a .txt in the output dir) — exit code 0")
+    else:
+        log(f"Done: {processed} processed, {skipped} skipped, {failed} failed")
     log(f"Total: {dt_total / 60:.1f}m ({dt_total:.0f}s)")
     log(f"Output: {output_root}")
     log("=" * 40)
