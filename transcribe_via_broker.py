@@ -18,14 +18,20 @@ CLI compatibility: positional args + `-o` flag match the legacy bash script
 exactly, so the /transcribe skill keeps working without rewriting its
 command-builder.
 
-Run: python -m transcribe_via_broker [-o <output_dir>] <input_folder>
+Run: python -m transcribe_via_broker [-o <output_dir>] [--upload] <input_folder>
                                      [model_size] [language] [extension_filter] [diarize]
+
+--upload (added 2026-10-27) is for running on a host other than the GPU box,
+through transcribe_remote.sh, which opens the SSH tunnel this needs. The audio
+track is stream-copied out of each file and sent as the request body, so the
+recording never lands on the GPU host and raw output is written locally.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,8 +44,9 @@ DEFAULT_BATCH_SIZE = int(os.environ.get("WHISPERX_BATCH_SIZE", "0")) or None  # 
 TRANSCRIBE_TIMEOUT = float(os.environ.get("TRANSCRIBE_TIMEOUT", "1800"))  # 30 min ceiling per file
 
 
-# Make the broker client importable
-sys.path.insert(0, "/opt/brain/src/gpu-broker")
+# Make the broker client importable. GPU_BROKER_SRC lets a host other than the
+# GPU box point at its own checkout (only client/ is used, which needs requests).
+sys.path.insert(0, os.environ.get("GPU_BROKER_SRC", "/opt/brain/src/gpu-broker"))
 from client.gpu_broker_client import GpuBrokerClient, BrokerError, InfeasibleError
 
 
@@ -138,6 +145,34 @@ def _check_path_accessible_to_container(audio: Path) -> None:
         )
 
 
+class AudioExtractError(RuntimeError):
+    pass
+
+
+def audio_stream(file: Path, chunk_bytes: int = 1 << 20):
+    """Yield the file's audio track remuxed to Matroska, for /transcribe_upload.
+
+    `-c:a copy`, not a re-encode: the worker decodes it with the same ffmpeg
+    command whisperx.load_audio() runs, and that was verified bit-identical to
+    the path API on 2026-10-27. Converting here (FLAC at 16 kHz) was not, since
+    this host's ffmpeg resamples differently from the image's. Matroska because
+    it streams; an MP4 whose index sits at the end cannot be read from a pipe.
+    """
+    proc = subprocess.Popen(
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(file),
+         "-vn", "-sn", "-dn", "-c:a", "copy", "-f", "matroska", "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        for chunk in iter(lambda: proc.stdout.read(chunk_bytes), b""):
+            yield chunk
+    finally:
+        proc.stdout.close()
+        err = proc.stderr.read().decode(errors="replace").strip()
+        if proc.wait() != 0:
+            raise AudioExtractError(f"ffmpeg could not extract audio from {file}: {err[-500:]}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="transcribe_via_broker",
@@ -145,6 +180,8 @@ def main() -> int:
     )
     p.add_argument("-o", "--output-dir", default=None,
                    help="Custom output directory (default: auto-generated in script dir)")
+    p.add_argument("--upload", action="store_true",
+                   help="Send the audio bytes instead of a path (run via transcribe_remote.sh)")
     p.add_argument("input_folder", help="Folder containing media files (recursed)")
     p.add_argument("model_size", nargs="?", default="small",
                    help="(legacy positional; ignored — broker pins the model server-side)")
@@ -193,6 +230,7 @@ def main() -> int:
     log(f"Output:   {output_root}")
     log(f"Log:      {log_path}")
     log(f"Broker:   {BROKER_URL}")
+    log(f"Mode:     {'upload (audio streamed, nothing written on the GPU host)' if args.upload else 'path (file must be on the GPU host)'}")
     log("=" * 40)
 
     files = discover_files(input_root, ext_filter)
@@ -239,23 +277,40 @@ def main() -> int:
                     log(f"[{i}/{len(files)}] Skipping (already done): {display}")
                     continue
 
-                _check_path_accessible_to_container(file)
+                if not args.upload:
+                    _check_path_accessible_to_container(file)
                 log(f"[{i}/{len(files)}] Processing: {display}")
                 t_file = time.time()
-                payload = {
-                    "audio_path": str(file.resolve()),
-                    "language": lang,
-                    "align": True,
-                    "diarize": diarize,
-                }
-                if DEFAULT_BATCH_SIZE is not None:
-                    payload["batch_size"] = DEFAULT_BATCH_SIZE
                 try:
-                    r = requests.post(
-                        f"{h.endpoint}/transcribe", json=payload, timeout=TRANSCRIBE_TIMEOUT,
-                    )
+                    if args.upload:
+                        params = {"align": "true", "diarize": str(diarize).lower()}
+                        if lang:
+                            params["language"] = lang
+                        if DEFAULT_BATCH_SIZE is not None:
+                            params["batch_size"] = DEFAULT_BATCH_SIZE
+                        r = requests.post(
+                            f"{h.endpoint}/transcribe_upload", params=params,
+                            data=audio_stream(file), timeout=TRANSCRIBE_TIMEOUT,
+                            headers={"Content-Type": "application/octet-stream"},
+                        )
+                    else:
+                        payload = {
+                            "audio_path": str(file.resolve()),
+                            "language": lang,
+                            "align": True,
+                            "diarize": diarize,
+                        }
+                        if DEFAULT_BATCH_SIZE is not None:
+                            payload["batch_size"] = DEFAULT_BATCH_SIZE
+                        r = requests.post(
+                            f"{h.endpoint}/transcribe", json=payload, timeout=TRANSCRIBE_TIMEOUT,
+                        )
                     r.raise_for_status()
                     response = r.json()
+                except AudioExtractError as exc:
+                    log(f"  FAILED: {exc}")
+                    failed += 1
+                    continue
                 except requests.RequestException as exc:
                     # Surface the server's own message, not just the status line.
                     # A bare "500 Server Error" cost a whole debugging session on
