@@ -2,37 +2,23 @@
 
 Batch audio/video transcription via the [gpu-broker](/opt/brain/src/gpu-broker/)-managed whisperx-server container. No local whisperx, torch, or CUDA install required — the script POSTs each file to the broker's `/transcribe` endpoint and writes the standard 5 output formats from the response.
 
-## Post-Phase-4 architecture (2026-06-14)
-
-Before:
+## Layout
 
 ```
-~/bigrepo/Mario/Projects/ai-transcriber/
-├── venv/                  9.6 GB  (torch + whisperx + pyannote + cuDNN8 + weights)
-├── install-cudnn8.sh      cuDNN 8/9 coexistence workaround for CTranslate2
-├── whisper-batch-transcribe.sh   loops the local `whisperx` CLI per file
-└── requirements.txt       torch 2.4.0+cu118 + whisperx <3.8 + cudnn 9.1.0.70
+transcribe_via_broker.py     client: acquire the transcribe role, POST each file (path or --upload), write 5 output formats
+whisper-batch-transcribe.sh  same-host dispatcher (GPU host, path mode) → transcribe_via_broker.py
+transcribe_remote.sh         other-host dispatcher: opens its own SSH tunnel, then --upload
+requirements.txt             requests (the only dependency)
 ```
 
-After:
-
-```
-/opt/brain/src/ai-transcriber/        (symlinked at ~/src/ai-transcriber)
-├── transcribe_via_broker.py   POSTs to broker /transcribe, writes 5 output formats
-├── whisper-batch-transcribe.sh  thin dispatcher → transcribe_via_broker.py
-├── requirements.txt           `requests>=2.31` (one line)
-└── /opt/fast/venvs/ai-transcriber/   19 MB venv (500× smaller)
-```
-
-Everything VRAM-related — whisperx large-v3, Pascal-compat torch pin, VAD-SHA, cuDNN8, batch_size=4 — lives inside the broker-managed `gpu-broker/whisperx-server:0.1.0` container. Frozen via Docker image build; no host-side drift possible.
+Everything model-side (whisperx large-v3, float16, pyannote, CUDA 12.8, batch_size) lives in the broker's `whisperx-server` image and `config/roles.yaml`; the client never touches the GPU.
 
 ## Requirements
 
-- gpu-broker running on `http://127.0.0.1:8090` (`systemctl --user is-active gpu-broker.service`)
-- `/opt/fast/venvs/ai-transcriber/` with `requests` installed (see provisioning below)
-- ffmpeg for media inspection (not strictly required for the broker path, but `/transcribe` skill may call it for audio probing)
-
-That's it. No CUDA, no torch, no Python 3.12+, no HF_TOKEN host-side (HF_TOKEN is configured **once** at the broker container's env for diarization).
+- A reachable gpu-broker: same host (`127.0.0.1:8090`), or over an SSH tunnel that also forwards the worker port 8083 (`transcribe_remote.sh` opens one; MIKASA's `gpu-broker-tunnel@<host>` units forward both).
+- Python with `requests`, and a gpu-broker checkout for its client (`GPU_BROKER_SRC`, default `/opt/brain/src/gpu-broker`).
+- `ffmpeg` on the client for `--upload` (it extracts the audio track). Path mode needs none.
+- No CUDA, torch or `HF_TOKEN` host-side; `HF_TOKEN` lives in the broker container's env.
 
 ## Provisioning the venv (one-time)
 
@@ -90,6 +76,13 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 ### From another host (`transcribe_remote.sh`)
 
 On a machine without the GPU (COLETTE), run `./transcribe_remote.sh` with the same arguments. It opens an SSH tunnel to the GPU host's broker (8090) and worker (8083), streams each file's audio track to `/transcribe_upload`, and writes outputs locally; nothing is written on the GPU host. Needs 127.0.0.1:8090 and :8083 free locally, a gpu-broker checkout for its client (`GPU_BROKER_SRC`, default `/opt/brain/src/gpu-broker`), and `python3` with `requests`. `TRANSCRIBE_GPU_HOST` picks the ssh alias (default `scully`). First real run 2026-10-30: 31m17s four-speaker meeting, diarized, ~54 s wall on the 3090 (~35x realtime, half of it diarization).
+
+**On MIKASA**, which already holds `127.0.0.1:8090` with its `gpu-broker-tunnel@<host>` unit (so `transcribe_remote.sh` refuses to start there), call the client directly through the brain repo's job runner, which wakes Scully (or SASHA when Scully is off), swaps the tunnel, and powers the host off afterwards if it woke it:
+
+```bash
+/opt/brain/repo/Mind/tools/host/gpu_job.sh -- \
+  python3 /opt/brain/src/ai-transcriber/transcribe_via_broker.py --upload -o "<out>" "<in>" large-v3 en "" true
+```
 
 ### Language handling
 
@@ -173,12 +166,3 @@ Audio path is outside the broker's bind mounts. Move under `/home/mario/` or `/o
 
 **Already-transcribed files re-processed**
 Check `.txt` exists at the mirrored output path. The auto-skip is based solely on `.txt`'s existence; `.srt`/`.vtt`/`.json`/`.tsv` are regenerated if `.txt` is missing.
-
-## Rollback path
-
-The original local-whisperx repo is preserved at `~/bigrepo/Mario/Projects/ai-transcriber/` (including its 9.6 GB venv). To revert: update the `/transcribe` skill to point back at `~/bigrepo/Mario/Projects/ai-transcriber/whisper-batch-transcribe.sh`. Plan to remove the old copy 1 week after Phase 4 cutover lands green.
-
-## History
-
-- **Pre-2026-06-14:** local whisperx 3.3.2 + torch 2.4.0+cu118 + pyannote 3.3.2 + cuDNN8/9 coexistence at `~/bigrepo/Mario/Projects/ai-transcriber/`.
-- **2026-06-14 (this revision):** repo moved to `/opt/brain/src/ai-transcriber/`, venv shrunk from 9.6 GB to 19 MB, script rewritten to POST to gpu-broker `/transcribe`. Phase 4 Task #4 of [gpu-model-broker](../../repo/Mind/projects/active/gpu-model-broker.md).
