@@ -14,19 +14,19 @@
 # Examples:
 #   ./whisper-batch-transcribe.sh "folder" small en               # English-only
 #   ./whisper-batch-transcribe.sh "folder" medium es              # Spanish-only
-#   ./whisper-batch-transcribe.sh "folder" large-v3 multi         # Mixed English/Spanish
-#   ./whisper-batch-transcribe.sh "folder" medium multi m4v       # Only .m4v files
+#   ./whisper-batch-transcribe.sh "folder" large-v3 auto          # Detect ONE language per file (not mixed-language; README § Language handling)
+#   ./whisper-batch-transcribe.sh "folder" medium auto m4v        # Only .m4v files
 #   ./whisper-batch-transcribe.sh "folder" medium en "" true      # English with speaker diarization
 #   ./whisper-batch-transcribe.sh -o ~/output "folder" medium en  # Custom output directory
 #
 # Model sizes: legacy positional (ignored — broker pins large-v3 server-side).
-# Languages:   en | es | multi (auto-detect)
+# Languages:   en | es | auto (one language per file; "multi" = legacy alias)
 # Diarize:     "true" to enable speaker diarization (requires HF_TOKEN
 #              configured in the broker's whisperx-server container)
 #
 # Env overrides:
 #   GPU_BROKER_URL       broker base URL (default http://127.0.0.1:8090)
-#   WHISPERX_BATCH_SIZE  override broker's pinned batch_size=4 (use sparingly)
+#   WHISPERX_BATCH_SIZE  override the broker's pinned batch_size (roles.yaml; use sparingly)
 #   TRANSCRIBE_TIMEOUT   per-file timeout seconds (default 1800)
 
 set -e

@@ -2,9 +2,9 @@
 
 Drop-in replacement for the pre-Phase-4 whisperx CLI loop. No local whisperx
 install, no torch, no CUDA/cuDNN host-side. Each file is POSTed to the
-broker-managed `whisperx-server:0.1.0` container at the endpoint returned by
+broker-managed whisperx-server container at the endpoint returned by
 `broker.acquire("transcribe")`; the broker handles model loading, batch_size
-pinning (4 server-side), eviction (rerank), and idle-shutdown.
+pinning (roles.yaml), and idle-shutdown.
 
 The single hold around the batch loop keeps `active_handles > 0` so the
 whisperx worker never idle-shuts mid-batch (idle_shutdown_seconds: 30 in
@@ -42,6 +42,7 @@ BROKER_URL = os.environ.get("GPU_BROKER_URL", "http://127.0.0.1:8090")
 ALL_EXTS = ["mkv", "mp4", "m4v", "webm", "mp3", "wav", "m4a", "ogg"]
 DEFAULT_BATCH_SIZE = int(os.environ.get("WHISPERX_BATCH_SIZE", "0")) or None  # None = server default
 TRANSCRIBE_TIMEOUT = float(os.environ.get("TRANSCRIBE_TIMEOUT", "1800"))  # 30 min ceiling per file
+PINNED_MODEL = "large-v3"  # what the whisperx-server image loads; the model_size positional cannot change it
 
 
 # Make the broker client importable. GPU_BROKER_SRC lets a host other than the
@@ -183,10 +184,10 @@ def main() -> int:
     p.add_argument("--upload", action="store_true",
                    help="Send the audio bytes instead of a path (run via transcribe_remote.sh)")
     p.add_argument("input_folder", help="Folder containing media files (recursed)")
-    p.add_argument("model_size", nargs="?", default="small",
-                   help="(legacy positional; ignored — broker pins the model server-side)")
-    p.add_argument("language", nargs="?", default="multi",
-                   help="en | es | multi (auto-detect)")
+    p.add_argument("model_size", nargs="?", default=PINNED_MODEL,
+                   help=f"(legacy positional; ignored — broker pins {PINNED_MODEL} server-side)")
+    p.add_argument("language", nargs="?", default="auto",
+                   help="en | es | auto (detects ONE language per file; 'multi' is a legacy alias)")
     p.add_argument("extension_filter", nargs="?", default="",
                    help='Only process .EXT files (e.g. "m4v"); empty = all extensions')
     p.add_argument("diarize", nargs="?", default="false",
@@ -198,7 +199,7 @@ def main() -> int:
         sys.stderr.write(f"ERROR: input folder not found: {input_root}\n")
         return 1
 
-    lang = None if args.language == "multi" else args.language
+    lang = None if args.language in ("auto", "multi") else args.language
     diarize = args.diarize.lower() == "true"
     ext_filter = args.extension_filter or None
 
@@ -224,8 +225,17 @@ def main() -> int:
     log("Whisper Batch Transcription (via gpu-broker)")
     log("=" * 40)
     log(f"Input:    {input_root}")
-    log(f"Model:    broker-pinned (whisperx large-v3 in container)")
-    log(f"Language: {args.language} ({lang or 'auto-detect'})")
+    log(f"Model:    broker-pinned (whisperx {PINNED_MODEL} in container)")
+    if args.model_size != PINNED_MODEL:
+        log(f"WARN: model_size '{args.model_size}' is ignored; the broker always runs {PINNED_MODEL}")
+    log(f"Language: {args.language} ({lang or 'auto-detect, one language per file'})")
+    # Whisper decodes one language per file. Forcing one does not filter the
+    # others out; it drops overlapping speech in them and translates the rest
+    # into the forced language, with nothing in the output to mark either
+    # (2026-10-30, FEEDBACK-forced-language-translates-2026-10-30.md).
+    if args.language == "multi":
+        log("WARN: 'multi' is not multilingual; it auto-detects one language per file (now spelled 'auto')")
+    log("NOTE:     mixed-language audio has no correct single pass; see README § Language handling")
     log(f"Diarize:  {'enabled' if diarize else 'disabled'}")
     log(f"Output:   {output_root}")
     log(f"Log:      {log_path}")
@@ -334,6 +344,8 @@ def main() -> int:
                 log(f"  Completed in {dt:.1f}s "
                     f"(audio={response.get('duration_s', 0):.1f}s, "
                     f"transcribe_ms={response.get('transcribe_ms', 0):.0f})")
+                resolved = response.get("language") or "?"
+                log(f"  Language: {resolved} ({'forced' if lang else 'detected'})")
     except InfeasibleError as e:
         log(f"\nERROR: broker infeasible — {e.reason} "
             f"(free={e.free_mb} MiB, would_evict={e.would_need_evict})")

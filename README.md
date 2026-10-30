@@ -60,8 +60,8 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
 | input_folder | path | required | Folder containing media files (subfolders included) |
-| model_size | (any of the legacy names) | small | **Ignored** — broker pins large-v3 server-side via image |
-| language | en, es, multi | multi | Language mode |
+| model_size | (any of the legacy names) | large-v3 | **Ignored** — broker pins large-v3 server-side via image; a different value logs a WARN |
+| language | en, es, auto | auto | `auto` detects **one** language for the whole file; `multi` is a legacy alias for it. See § Language handling |
 | extension_filter | file extension (e.g. m4v) | all | Process only files with this extension (use "" to skip) |
 | diarize | true, false | false | Enable speaker diarization (requires HF_TOKEN on broker container) |
 
@@ -74,11 +74,11 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 # Spanish content
 ./whisper-batch-transcribe.sh ~/Videos/spanish medium es
 
-# Mixed/unknown languages (auto-detect)
-./whisper-batch-transcribe.sh ~/Videos/mixed large-v3 multi
+# Unknown language (auto-detects ONE language per file; not a mixed-language mode)
+./whisper-batch-transcribe.sh ~/Videos/mixed large-v3 auto
 
 # Process only .m4v files
-./whisper-batch-transcribe.sh ~/Videos/meetings medium multi m4v
+./whisper-batch-transcribe.sh ~/Videos/meetings medium auto m4v
 
 # English with speaker diarization
 ./whisper-batch-transcribe.sh ~/Videos/interviews medium en "" true
@@ -86,6 +86,22 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 # Custom output directory
 ./whisper-batch-transcribe.sh -o ~/my-transcripts ~/Videos/lectures medium en
 ```
+
+### From another host (`transcribe_remote.sh`)
+
+On a machine without the GPU (COLETTE), run `./transcribe_remote.sh` with the same arguments. It opens an SSH tunnel to the GPU host's broker (8090) and worker (8083), streams each file's audio track to `/transcribe_upload`, and writes outputs locally; nothing is written on the GPU host. Needs 127.0.0.1:8090 and :8083 free locally, a gpu-broker checkout for its client (`GPU_BROKER_SRC`, default `/opt/brain/src/gpu-broker`), and `python3` with `requests`. `TRANSCRIBE_GPU_HOST` picks the ssh alias (default `scully`). First real run 2026-10-30: 31m17s four-speaker meeting, diarized, ~54 s wall on the 3090 (~35x realtime, half of it diarization).
+
+### Language handling
+
+Whisper decodes **one language per file**. Nothing in the output marks when that assumption broke, so know these before trusting a transcript of mixed-language audio (found 2026-10-30, detail and measurements in `FEEDBACK-forced-language-translates-2026-10-30.md`):
+
+| Setting | What happens to speech in another language |
+|---|---|
+| `en` (forced) | **Dropped** when it overlaps speech in the forced language. No gap in the `.srt`, no marker, fluent text around it: the transcript reads as complete. |
+| `es` (forced) on English speech | **Translated** into fluent Spanish and emitted as if transcribed. Tell: English product/UI names left untranslated mid-sentence. |
+| `auto` (`multi`) | Detects one language for the file, then behaves exactly like forcing it (byte-identical to `en` on the 2026-10-30 file). |
+
+The log prints each file's resolved language and whether it was forced or detected. **For mixed-language audio, clip and re-run:** transcribe the whole file in its dominant language, cut each foreign-language span with `ffmpeg -ss <start> -to <end>`, transcribe each clip alone with its own language, and splice by timestamp (offset the clip's times by `<start>`). This only works when you know the span exists, so ask the person who was there. A diarizer-vs-transcript cross-check that would flag speaker turns with no text is open in the vault (`gpu-broker-upgrade` checklist § Transcription).
 
 ### Supported Formats
 
@@ -106,7 +122,7 @@ The script warns on non-resolvable paths before POSTing.
 | Var | Default | Purpose |
 |---|---|---|
 | `GPU_BROKER_URL` | `http://127.0.0.1:8090` | broker base URL (override for remote brokers) |
-| `WHISPERX_BATCH_SIZE` | broker default (4) | per-file batch_size override; rarely needed |
+| `WHISPERX_BATCH_SIZE` | broker default (`roles.yaml`, 16 on the 3090) | per-file batch_size override; rarely needed |
 | `TRANSCRIBE_TIMEOUT` | 1800 | per-file timeout seconds |
 
 ## Output
@@ -138,7 +154,7 @@ Resource usage:
 
 | Mode | VRAM (broker-side) | Speed |
 |------|---------------------|-------|
-| Transcription only | ~5.8 GiB (whisperx large-v3 int8) | 1x |
+| Transcription only | ~5.8 GiB (whisperx large-v3 float16) | 1x |
 | Transcription + Diarization | adds pyannote pipeline | 1.5-2x slower |
 
 ## Troubleshooting
