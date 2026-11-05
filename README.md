@@ -77,6 +77,19 @@ Same CLI contract as the legacy bash script — the `/transcribe` skill keeps wo
 
 On a machine without the GPU (COLETTE), run `./transcribe_remote.sh` with the same arguments. It opens an SSH tunnel to the GPU host's broker (8090) and worker (8083), streams each file's audio track to `/transcribe_upload`, and writes outputs locally; nothing is written on the GPU host. Needs 127.0.0.1:8090 and :8083 free locally, a gpu-broker checkout for its client (`GPU_BROKER_SRC`, default `/opt/brain/src/gpu-broker`), and `python3` with `requests`. `TRANSCRIBE_GPU_HOST` picks the ssh alias (default `scully`). If that host does not answer ssh, the script wakes it with `~/bin/wake --wait` (WoL; copy MIKASA's `~/bin/wake` to a new client) and powers it off on exit, success or failure, unless it was already up, another client still holds a broker handle, or `TRANSCRIBE_KEEP_ON=1`. First real run 2026-10-30: 31m17s four-speaker meeting, diarized, ~54 s wall on the 3090 (~35x realtime, half of it diarization).
 
+**Power lease, for several runs against one boot.** Waking costs ~40 s and the poweroff takes the worker container and its resident weights with it, so back-to-back runs each paid that ~40 s plus ~13 s of cold start. Measured 2026-11-05 transcribing one 27-minute meeting twice (auto-detect, then forced `en`): 51 s and 58 s wall for 19 s of real transcription either time, and two cold starts identical to the millisecond.
+
+Set `TRANSCRIBE_KEEP_ON=1` on the first run of a chain and `TRANSCRIBE_RELEASE=1` on the last; runs in between need neither flag.
+
+```bash
+TRANSCRIBE_KEEP_ON=1 ./transcribe_remote.sh -o out/auto  in/ m auto "" true
+TRANSCRIBE_RELEASE=1 ./transcribe_remote.sh -o out/en    in/ m en   "" true
+```
+
+The lease (`$TRANSCRIBE_LEASE_DIR/transcribe-lease-$HOST`, default under `$XDG_RUNTIME_DIR`) stores the host's boot id, so it is never honoured across a reboot, and it is only taken by a run that did the waking: a host that was already up belongs to whoever turned it on, and `TRANSCRIBE_KEEP_ON=1` there takes no lease and says so. `TRANSCRIBE_RELEASE=1` without a matching lease powers nothing off. If the broker still has other clients' handles open at release time, the host stays up **and the lease is kept**, so a later release can finish the job. The two flags together are refused with exit 2.
+
+Decision table, with ssh/wake/python stubbed: `tests/power-lease/run.sh` (11 cases, no GPU host needed).
+
 **On MIKASA**, which already holds `127.0.0.1:8090` with its `gpu-broker-tunnel@<host>` unit (so `transcribe_remote.sh` refuses to start there), call the client directly through the brain repo's job runner, which wakes Scully (or SASHA when Scully is off), swaps the tunnel, and powers the host off afterwards if it woke it:
 
 ```bash

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub wake: the host "comes up" for the rest of the run.
+echo "stub wake: $*" >&2
+exit "${STUB_WAKE_RC:-0}"

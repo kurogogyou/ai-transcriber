@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Stub for $PY. Three call shapes in transcribe_remote.sh:
+#   -c '...active_handles...'  broker_busy  -> exit 0 means BUSY
+#   -c '...health...'          health probe -> exit 0 means ready
+#   <path>/transcribe_via_broker.py --upload ...   the real work
+case "$*" in
+    *active_handles*) exit "${STUB_BUSY_RC:-1}" ;;   # default 1 = not busy
+    *health*)         exit 0 ;;
+    *transcribe_via_broker.py*) echo "stub transcribe: $*" >> "$STUB_LOG/work"; exit "${STUB_WORK_RC:-0}" ;;
+esac
+exit 1
