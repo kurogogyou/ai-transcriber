@@ -90,6 +90,8 @@ The lease (`$TRANSCRIBE_LEASE_DIR/transcribe-lease-$HOST`, default under `$XDG_R
 
 Decision table, with ssh/wake/python stubbed: `tests/power-lease/run.sh` (11 cases, no GPU host needed).
 
+⚠️ **The lease assumes it is the only client deciding power for that host.** It holds client-local state (a file under `$XDG_RUNTIME_DIR`) about a shared remote resource, and the `active_handles` check that is meant to cover other clients samples an instant, so a batch job that releases between units of work reads as idle. With a second client against the same host this can power the box off mid-job. Design discussion and the options: `gpu-broker/docs/power-orchestration.md`.
+
 **On MIKASA**, which already holds `127.0.0.1:8090` with its `gpu-broker-tunnel@<host>` unit (so `transcribe_remote.sh` refuses to start there), call the client directly through the brain repo's job runner, which wakes Scully (or SASHA when Scully is off), swaps the tunnel, and powers the host off afterwards if it woke it:
 
 ```bash
